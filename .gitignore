@@ -1,0 +1,13 @@
+/target/
+**/target/
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+coverage/
+*.lcov
+*.profraw
+.sites-runtime/
+/sites/generated/
+**/__pycache__/
