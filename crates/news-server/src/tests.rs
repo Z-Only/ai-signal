@@ -996,3 +996,155 @@ async fn filter_validation_rejects_unknown_categories_and_overlong_trimmed_queri
     }
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn sqlite_integer_boundaries_are_checked_in_both_directions() {
+    assert_eq!(sqlite_integer(0).unwrap(), 0);
+    assert_eq!(sqlite_integer(350).unwrap(), 350);
+    let largest = usize::try_from(i64::MAX).unwrap_or(usize::MAX);
+    assert_eq!(
+        sqlite_integer(largest).unwrap(),
+        i64::try_from(largest).unwrap()
+    );
+    if let Some(overflow) = largest.checked_add(1) {
+        assert_eq!(
+            sqlite_integer(overflow).unwrap_err(),
+            "Value exceeds SQLite integer range"
+        );
+    }
+    let db = Connection::open_in_memory().unwrap();
+    for value in [0_i64, 350, i64::MAX] {
+        let result = db.query_row("SELECT ?", [value], |row| row_count(row, 0));
+        match usize::try_from(value) {
+            Ok(expected) => assert_eq!(result.unwrap(), expected),
+            Err(_) => assert!(
+                matches!(result, Err(rusqlite::Error::IntegralValueOutOfRange(0, v)) if v == value)
+            ),
+        }
+    }
+    for value in [-1_i64, i64::MIN] {
+        let result = db.query_row("SELECT 0, ?", [value], |row| row_count(row, 1));
+        assert!(
+            matches!(result, Err(rusqlite::Error::IntegralValueOutOfRange(1, v)) if v == value)
+        );
+    }
+    for sql in ["SELECT 'corrupt'", "SELECT NULL", "SELECT 1.5"] {
+        assert!(matches!(
+            db.query_row(sql, [], |row| row_count(row, 0)),
+            Err(rusqlite::Error::InvalidColumnType(..))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn pagination_clamps_extreme_values_without_sqlite_overflow() {
+    let (state, _, clock) = fixture();
+    state.refresh().await.unwrap();
+    for offset in [0, usize::MAX] {
+        let news = state
+            .db
+            .snapshot_page(usize::MAX, offset, clock.now())
+            .await
+            .unwrap();
+        assert_eq!(news.pagination.limit, 350);
+        assert_eq!(
+            news.pagination.offset,
+            offset.min(usize::try_from(i64::MAX).unwrap_or(usize::MAX))
+        );
+        assert_eq!(news.pagination.total, 5);
+        assert!(!news.pagination.has_more);
+        assert_eq!(news.articles.len(), if offset == 0 { 5 } else { 0 });
+    }
+}
+
+#[tokio::test]
+async fn invalid_persisted_run_counts_fail_closed() {
+    let (state, _, _) = fixture();
+    state.refresh().await.unwrap();
+    for value in [
+        rusqlite::types::Value::Integer(-1),
+        rusqlite::types::Value::Text("corrupt private value".into()),
+    ] {
+        state
+            .db
+            .run(move |db| {
+                db.execute("UPDATE runs SET added=?", [value])
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(state.db.snapshot().await.is_err());
+        let (status, headers, body) =
+            request(router(state.clone(), None), "GET", "/api/news", None).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(body, serde_json::json!({"error": UNAVAILABLE}));
+    }
+}
+
+#[tokio::test]
+async fn static_directory_redirect_head_and_range_contracts_are_preserved() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("docs")).unwrap();
+    std::fs::write(directory.path().join("docs/index.html"), "0123456789").unwrap();
+    let (state, _, _) = fixture();
+    let app = router(state, Some(directory.path().into()));
+    let redirect = app
+        .clone()
+        .oneshot(Request::builder().uri("/docs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(redirect.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(redirect.headers()[header::LOCATION], "/docs/");
+    let head = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/docs/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.headers()[header::CONTENT_LENGTH], "10");
+    assert!(head
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .is_empty());
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/docs/")
+                .header(header::RANGE, "bytes=2-5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 2-5/10");
+    assert_eq!(partial.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        &partial.into_body().collect().await.unwrap().to_bytes()[..],
+        b"2345"
+    );
+    let invalid = app
+        .oneshot(
+            Request::builder()
+                .uri("/docs/")
+                .header(header::RANGE, "bytes=99-100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(invalid.headers()[header::CONTENT_RANGE], "bytes */10");
+}

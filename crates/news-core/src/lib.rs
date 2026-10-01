@@ -266,7 +266,7 @@ fn parse_rss(xml: &str) -> Result<Vec<RawItem>, FeedError> {
                 for attribute in element.attributes() {
                     attribute.map_err(|error| FeedError::InvalidXml(error.to_string()))?;
                 }
-                let name = element.name().as_ref().to_vec();
+                let name = element.name().as_ref().as_bytes().to_vec();
                 if path.is_empty() {
                     if seen_root || name != b"rss" {
                         return Err(FeedError::InvalidFormat);
@@ -301,23 +301,23 @@ fn parse_rss(xml: &str) -> Result<Vec<RawItem>, FeedError> {
                 path.pop();
             }
             Event::Text(value) => {
-                let value = String::from_utf8_lossy(value.as_ref());
+                let value = value.as_ref();
                 if path.is_empty() && !value.trim().is_empty() {
                     return Err(FeedError::InvalidFormat);
                 }
-                append_field(&mut item, &path, &value);
+                append_field(&mut item, &path, value);
             }
             Event::CData(value) => {
                 if path.is_empty() {
                     return Err(FeedError::InvalidFormat);
                 }
-                append_field(&mut item, &path, &String::from_utf8_lossy(value.as_ref()));
+                append_field(&mut item, &path, value.as_ref());
             }
             Event::GeneralRef(value) => {
                 if path.is_empty() {
                     return Err(FeedError::InvalidFormat);
                 }
-                let reference = format!("&{};", String::from_utf8_lossy(value.as_ref()));
+                let reference = format!("&{};", value.as_ref());
                 append_field(
                     &mut item,
                     &path,
@@ -372,7 +372,10 @@ pub fn normalize_feed(
             continue;
         }
         articles.push(Article {
-            id: format!("{:x}", Sha256::digest(url.as_bytes())),
+            id: Sha256::digest(url.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
             title,
             url,
             source: source.id.to_string(),
