@@ -2,23 +2,30 @@
 import { computed, ref } from "vue";
 import ArticleFeed from "./components/ArticleFeed.vue";
 import CategoryFilters from "./components/CategoryFilters.vue";
+import NewsSearch from "./components/NewsSearch.vue";
 import NewsStats from "./components/NewsStats.vue";
 import PreferencesControl from "./components/PreferencesControl.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 import SourceDirectory from "./components/SourceDirectory.vue";
 import { useNews } from "./composables/useNews";
 import { usePreferences } from "./composables/usePreferences";
-import type { Category, View } from "./core/types";
-const { data, loading, error, hasMore, load } = useNews();
+import type { View } from "./core/types";
+const {
+  data,
+  active,
+  query,
+  loading,
+  error,
+  ready,
+  hasMore,
+  resultCount,
+  load,
+  setFilters,
+  retry,
+} = useNews();
 const { locale, theme, t } = usePreferences();
-const active = ref<Category>("全部资讯");
 const view = ref<View>("feed");
-const articles = computed(() =>
-  data.value.articles.filter(
-    (article) =>
-      active.value === "全部资讯" || article.category === active.value,
-  ),
-);
+const filtered = computed(() => active.value !== "全部资讯" || !!query.value);
 const sourceCount = computed(
   () => data.value.stats?.total_sources ?? data.value.sources.length,
 );
@@ -87,7 +94,7 @@ const fullDate = computed(() =>
         <NewsStats :data="data" :locale="locale" :t="t" />
         <div v-if="error" class="notice error" role="alert">
           {{ t("error") }}
-          <button type="button" :disabled="loading" @click="load()">
+          <button type="button" :disabled="loading" @click="retry()">
             {{ t("retry") }}
           </button>
         </div>
@@ -99,13 +106,29 @@ const fullDate = computed(() =>
           {{ t(data.run.status === "partial" ? "partial" : "failed") }}
         </div>
         <template v-if="view === 'feed'">
+          <NewsSearch :query="query" :t="t" @search="setFilters(active, $event)" />
           <CategoryFilters
             :active="active"
             :count="total"
             :locale="locale"
             :t="t"
-            @select="active = $event"
+            @select="setFilters($event, query)"
           />
+          <div
+            class="result-summary"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span v-if="query">{{ t("searchFor", { query }) }}</span>
+            <span v-if="loading">{{ t("searching") }}</span>
+            <span v-else-if="ready">{{
+              t("resultCount", {
+                count: resultCount,
+                loaded: data.articles.length,
+              })
+            }}</span>
+          </div>
           <div class="feed-results" :aria-busy="loading">
             <div
               v-if="loading && !data.articles.length"
@@ -114,16 +137,20 @@ const fullDate = computed(() =>
             >
               {{ t("connectingLibrary") }}
             </div>
-            <div v-else-if="!articles.length" class="empty" role="status">
+            <div
+              v-else-if="ready && !data.articles.length"
+              class="empty"
+              role="status"
+            >
               <span aria-hidden="true">◎</span>
-              <h2>{{ t("emptyTitle") }}</h2>
+              <h2>{{ t(filtered ? "noResults" : "emptyTitle") }}</h2>
               <p>
-                {{ t(data.articles.length ? "emptyCategory" : "emptyLibrary") }}
+                {{ t(filtered ? "noResultsHint" : "emptyLibrary") }}
               </p>
             </div>
-            <div v-else class="content-grid">
+            <div v-else-if="data.articles.length" class="content-grid">
               <ArticleFeed
-                :articles="articles"
+                :articles="data.articles"
                 :sources="data.sources"
                 :locale="locale"
                 :t="t"
@@ -154,7 +181,9 @@ const fullDate = computed(() =>
             </div>
           </div>
           <div v-if="hasMore" class="pagination">
-            <p>{{ t("loaded", { count: data.articles.length }) }}</p>
+            <p>{{
+              t("loaded", { count: data.articles.length, total: resultCount })
+            }}</p>
             <button
               class="reload"
               type="button"

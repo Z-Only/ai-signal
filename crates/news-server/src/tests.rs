@@ -755,3 +755,244 @@ async fn insert_counting_does_not_hide_unrelated_constraint_failures() {
     assert_eq!(run.status, "running");
     assert_eq!(run.added, 0);
 }
+
+fn news_path(parameters: &[(&str, &str)]) -> String {
+    let mut url = reqwest::Url::parse("https://example.test/api/news").unwrap();
+    url.query_pairs_mut()
+        .extend_pairs(parameters.iter().copied());
+    format!("/api/news?{}", url.query().unwrap())
+}
+
+async fn search_fixture() -> AppState {
+    let (state, _, clock) = fixture();
+    let now = iso_timestamp(clock.now());
+    let mut articles: Vec<_> = (0..120)
+        .map(|index| Article {
+            id: format!("{index:04}"),
+            title: if index >= 100 {
+                format!("RESEARCH Needle {index}")
+            } else {
+                format!("AI update {index}")
+            },
+            url: format!("https://example.test/search/{index}"),
+            source: "openai".into(),
+            category: if index >= 100 {
+                "研究前沿"
+            } else {
+                "模型进展"
+            }
+            .into(),
+            summary: "Official update".into(),
+            published_at: now.clone(),
+            fetched_at: now.clone(),
+        })
+        .collect();
+    for (id, title, summary, category) in [
+        (
+            "percent",
+            "Efficiency improves 10% today",
+            "Literal punctuation",
+            "安全治理",
+        ),
+        (
+            "underscore",
+            "Model foo_bar",
+            "Literal punctuation",
+            "具身智能",
+        ),
+        (
+            "backslash",
+            r"Path C:\Models",
+            "Literal punctuation",
+            "产业动态",
+        ),
+        (
+            "combined",
+            r"Percent%_\Pair",
+            "Literal punctuation",
+            "模型进展",
+        ),
+        (
+            "quoted",
+            "Quoted ' OR 1=1 -- text",
+            "Literal SQL-like text",
+            "安全治理",
+        ),
+        (
+            "summary",
+            "Ordinary title",
+            "SummaryOnlyTerm appears here",
+            "开发工具",
+        ),
+        ("unicode", "普通标题", "汉字摘要", "研究前沿"),
+    ] {
+        articles.push(Article {
+            id: id.into(),
+            title: title.into(),
+            summary: summary.into(),
+            category: category.into(),
+            url: format!("https://example.test/search/{id}"),
+            source: "google".into(),
+            published_at: now.clone(),
+            fetched_at: now.clone(),
+        });
+    }
+    state
+        .db
+        .acquire(clock.now(), "search-seed".into())
+        .await
+        .unwrap();
+    state
+        .db
+        .finish("search-seed".into(), clock.now(), articles, details())
+        .await
+        .unwrap();
+    state
+}
+
+#[tokio::test]
+async fn search_and_category_filter_full_corpus_before_pagination() {
+    let app = router(search_fixture().await, None);
+    let (_, _, initial) = request(app.clone(), "GET", "/api/news?limit=50", None).await;
+    assert_eq!(initial["articles"].as_array().unwrap().len(), 50);
+    assert!(initial["articles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|article| article["category"] == "模型进展"));
+    let path = news_path(&[
+        ("category", "研究前沿"),
+        ("q", "  nEeDlE  "),
+        ("limit", "2"),
+        ("offset", "1"),
+    ]);
+    let (status, _, filtered) = request(app.clone(), "GET", &path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        filtered["pagination"],
+        serde_json::json!({"total":20,"limit":2,"offset":1,"has_more":true})
+    );
+    assert_eq!(filtered["articles"][0]["id"], "0101");
+    assert_eq!(filtered["articles"][1]["id"], "0102");
+    assert_eq!(filtered["stats"], initial["stats"]);
+    assert_eq!(filtered["stats"]["total_articles"], 127);
+    let path = news_path(&[("q", "needle"), ("limit", "2"), ("offset", "19")]);
+    let (_, _, last) = request(app.clone(), "GET", &path, None).await;
+    assert_eq!(last["articles"].as_array().unwrap().len(), 1);
+    assert_eq!(last["articles"][0]["id"], "0119");
+    assert_eq!(last["pagination"]["total"], 20);
+    assert_eq!(last["pagination"]["has_more"], false);
+    let path = news_path(&[("category", "研究前沿"), ("q", "needle"), ("offset", "999")]);
+    let (_, _, past_end) = request(app, "GET", &path, None).await;
+    assert_eq!(past_end["articles"], serde_json::json!([]));
+    assert_eq!(past_end["pagination"]["total"], 20);
+    assert_eq!(past_end["pagination"]["has_more"], false);
+}
+
+#[tokio::test]
+async fn category_filter_is_exact_and_query_matches_title_or_summary() {
+    let app = router(search_fixture().await, None);
+    for category in CATEGORIES {
+        let path = news_path(&[("category", category)]);
+        let (status, _, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let articles = body["articles"].as_array().unwrap();
+        assert!(!articles.is_empty());
+        assert!(articles
+            .iter()
+            .all(|article| article["category"] == category));
+        assert_eq!(
+            body["pagination"]["total"].as_u64().unwrap() as usize,
+            articles.len()
+        );
+        assert_eq!(body["stats"]["total_articles"], 127);
+    }
+    for (category, query, expected) in [
+        ("开发工具", "SUMMARYONLYTERM", 1),
+        ("模型进展", "SUMMARYONLYTERM", 0),
+        ("研究前沿", "汉字", 1),
+        ("", "unmatched query", 0),
+    ] {
+        let path = news_path(&[("category", category), ("q", query)]);
+        let (status, _, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["pagination"]["total"], expected);
+        assert_eq!(
+            body["articles"].as_array().unwrap().len(),
+            expected as usize
+        );
+        assert_eq!(body["stats"]["total_articles"], 127);
+    }
+    let path = news_path(&[("category", ""), ("q", " \t\u{2003}"), ("limit", "50")]);
+    let (_, _, empty) = request(app, "GET", &path, None).await;
+    assert_eq!(empty["pagination"]["total"], 127);
+    assert_eq!(empty["articles"].as_array().unwrap().len(), 50);
+    assert_eq!(empty["pagination"]["has_more"], true);
+}
+
+#[tokio::test]
+async fn search_escapes_like_wildcards_backslashes_and_sql_like_input() {
+    let app = router(search_fixture().await, None);
+    for (query, expected) in [
+        ("%", 2),
+        ("_", 2),
+        (r"\", 2),
+        (r"%_\", 1),
+        ("' OR 1=1 --", 1),
+        ("%' OR 1=1 --", 0),
+        ("10% TODAY", 1),
+        (r"c:\models", 1),
+    ] {
+        let path = news_path(&[("q", query)]);
+        let (status, _, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK, "query {query:?}");
+        assert_eq!(body["pagination"]["total"], expected, "query {query:?}");
+        assert_eq!(
+            body["articles"].as_array().unwrap().len(),
+            expected as usize
+        );
+    }
+    let (_, _, all) = request(app, "GET", "/api/news", None).await;
+    assert_eq!(all["pagination"]["total"], 127);
+}
+
+#[tokio::test]
+async fn filter_validation_rejects_unknown_categories_and_overlong_trimmed_queries() {
+    let (state, fetcher, _) = fixture();
+    let app = router(state, None);
+    for category in ["unknown", "研究", "研究前沿 ", "全部资讯", "' OR 1=1 --"] {
+        let path = news_path(&[("category", category)]);
+        let (status, headers, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(body["error"], "Unknown category");
+    }
+    for query in ["\0", "needle\0ignored"] {
+        let path = news_path(&[("q", query)]);
+        let (status, _, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body["error"],
+            "Search query must not contain null characters"
+        );
+    }
+    for query in ["x".repeat(201), "界".repeat(201)] {
+        let path = news_path(&[("q", &query)]);
+        let (status, _, body) = request(app.clone(), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "Search query must be at most 200 characters");
+    }
+    for query in [
+        "x".repeat(200),
+        "界".repeat(200),
+        format!("  {}\t", "界".repeat(200)),
+        " ".repeat(201),
+    ] {
+        let path = news_path(&[("q", &query)]);
+        assert_eq!(
+            request(app.clone(), "GET", &path, None).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
+}

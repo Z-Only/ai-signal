@@ -24,6 +24,9 @@ STATIC_DIR=frontend/dist cargo run -p ai-news-server
 
 See `crates/news-server/README.md` for backend environment variables. Never commit real credentials. `GET /api/news` is public. Administrative refresh requests require a bearer credential; unset credentials deny writes. Native startup/hourly refresh runs independently of visitors.
 
+News reads accept optional `category` (an exact category label), `q` (a trimmed title/summary substring up to 200 Unicode code points), `limit`, and `offset`. Filtering runs across the stored corpus before pagination. `pagination.total` counts matching records, while `stats` stays global. Search uses SQLite LIKE's ASCII case-insensitive matching; `%` and `_` are literal search characters. Unknown categories, overlong queries, and queries containing NUL return HTTP 400.
+
+
 Run the frontend development server with `bun run --cwd frontend dev`; its `/api` proxy targets the backend. Configure matching ports as documented by each component.
 
 ## Checks

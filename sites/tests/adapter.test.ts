@@ -166,6 +166,94 @@ describe("HTTP and database", () => {
     s.db.exec("INSERT INTO settings VALUES('schedule','hourly')");
     expect(((await s.news()) as any).schedule).toBe("hourly");
   });
+  it("filters the full corpus before pagination and keeps global statistics", async () => {
+    const articles = [
+      {
+        ...article,
+        id: "a",
+        title: "ROBOT breakthrough",
+        category: "具身智能",
+      },
+      {
+        ...article,
+        id: "b",
+        title: "Other",
+        summary: "A robot learns",
+        category: "具身智能",
+      },
+      { ...article, id: "c", title: "Robot model", category: "模型进展" },
+      {
+        ...article,
+        id: "d",
+        title: "Exact 100%_! claim",
+        category: "产业动态",
+      },
+      {
+        ...article,
+        id: "e",
+        title: "Exact 100abc claim",
+        category: "产业动态",
+      },
+    ].map((a) => ({ ...a, url: `https://example.com/${a.id}` }));
+    const s = await setup({ parse: () => articles });
+    await s.refresh();
+    const filters = new URLSearchParams({
+      category: "具身智能",
+      q: "  robot  ",
+      limit: "1",
+    });
+    const first: any = await s.news(`?${filters}`);
+    expect(first.articles.map((a: Article) => a.id)).toEqual(["a"]);
+    expect(first.pagination).toEqual({
+      total: 2,
+      offset: 0,
+      limit: 1,
+      has_more: true,
+    });
+    expect(first.stats.total_articles).toBe(5);
+    filters.set("offset", "1");
+    const next: any = await s.news(`?${filters}`);
+    expect(next.articles.map((a: Article) => a.id)).toEqual(["b"]);
+    expect(next.pagination.has_more).toBe(false);
+    expect(((await s.news("?q=robot")) as any).pagination.total).toBe(3);
+    expect(
+      ((await s.news("?category=" + encodeURIComponent("具身智能"))) as any)
+        .pagination.total,
+    ).toBe(2);
+    expect(
+      ((await s.news("?q=" + encodeURIComponent("%_!"))) as any).articles.map(
+        (a: Article) => a.id,
+      ),
+    ).toEqual(["d"]);
+    expect(
+      ((await s.news("?q=" + encodeURIComponent("' OR 1=1 --"))) as any)
+        .pagination.total,
+    ).toBe(0);
+    expect(
+      ((await s.news("?q=%20%20&category=")) as any).pagination.total,
+    ).toBe(5);
+    expect(
+      ((await s.news("?q=" + encodeURIComponent("🤖".repeat(200)))) as any)
+        .pagination.total,
+    ).toBe(0);
+  });
+  it("rejects invalid category and oversized search without changing stored data", async () => {
+    const s = await setup();
+    await s.refresh();
+    for (const query of [
+      "?category=unknown",
+      "?q=%00",
+      "?q=" + encodeURIComponent("🤖".repeat(201)),
+    ]) {
+      const res = await s.api(
+        new Request("https://site.test/api/news" + query),
+        s.env,
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Invalid news filters" });
+    }
+    expect(((await s.news()) as any).stats.total_articles).toBe(1);
+  });
   it("excludes future records from the rolling day count", async () => {
     const future = {
       ...article,

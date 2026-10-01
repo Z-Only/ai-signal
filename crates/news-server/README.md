@@ -30,7 +30,16 @@ There are no permissive CORS headers or cookie-based writer credentials.
 
 - `GET /healthz`: process liveness, `{"status":"ok"}`
 - `GET /api/news?limit=350&offset=0`: public articles sorted newest first, sources,
-  latest run, schedule, pagination and database-backed stats. Limits clamp to
+  latest run, schedule, pagination and database-backed stats. Optional `category`
+  exactly matches one of 模型进展、研究前沿、开发工具、安全治理、具身智能、产业动态;
+  omit it or use an empty value for all categories. Optional `q` searches literal
+  substrings in titles or summaries, case-insensitively for ASCII letters (SQLite
+  LIKE semantics). `%`, `_` and backslash are literal characters. Queries are
+  trimmed and limited to 200 Unicode characters; invalid categories and longer
+  trimmed queries return JSON HTTP 400. NUL characters are rejected as invalid
+  rather than allowing SQLite to truncate the search pattern. Both filters apply across the complete
+  database before pagination. `pagination.total` is the filtered count; `stats`
+  always describes the entire database. Limits clamp to
   1–350; offsets start at zero. `recent_articles` counts publications from the
   rolling preceding 24 hours. `total_sources` is the five configured publishers
 - `POST /api/refresh`: requires `Authorization: Bearer <ADMIN_TOKEN>`. Returns

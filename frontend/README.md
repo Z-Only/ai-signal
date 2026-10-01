@@ -28,7 +28,10 @@ Vitest, Vue Test Utils, and jsdom test every runtime source module, including th
 - The original response model (`articles`, `sources`, `run`, `schedule`) remains supported
 - Optional `stats` provides truthful whole-library totals; pagination totals are the next fallback
 - Optional `pagination` supports `offset`/`limit` and a Load more control; overlapping pages are deduplicated by article ID
-- Categories filter loaded articles, with an explicit loaded-count notice while additional pages remain
+- Categories and submitted searches request the complete corpus from the backend using `category` and `q`; filtered pagination totals drive the result count, while collection statistics remain global
+- Search matches literal title/summary substrings, trims whitespace, and accepts up to 200 Unicode characters; a clear control removes only the search
+- Changing category or submitting a new search resets pagination, clears stale articles immediately, and aborts the prior request; late responses cannot replace current results
+- Repeated refresh/load-more clicks are ignored while pending; failed load-more retries preserve and extend the current results
 - Refresh failures retain the last successful response; requests time out after 15 seconds and are canceled when the reader unmounts
 - Interface language is Chinese or English; titles and summaries remain in their source language
 - Light, dark, and system appearance preferences are stored locally, with a session-only fallback when storage is unavailable
