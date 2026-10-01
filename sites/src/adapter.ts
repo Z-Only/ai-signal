@@ -13,6 +13,11 @@ export interface Source {
   name: string;
   home: string;
   url?: string;
+  method?: "GET" | "POST";
+  request_body?: string | null;
+  request_language?: string | null;
+  max_bytes?: number;
+  timeout_seconds?: number;
 }
 export interface Env {
   DB: D1Database;
@@ -27,13 +32,6 @@ export interface Dependencies {
   now?: () => number;
   uuid?: () => string;
 }
-const feeds: Record<string, string> = {
-  openai: "https://openai.com/news/rss.xml",
-  deepmind: "https://deepmind.google/blog/rss.xml",
-  google: "https://blog.google/innovation-and-ai/technology/ai/rss/",
-  nvidia: "https://blogs.nvidia.com/feed/",
-  huggingface: "https://huggingface.co/blog/feed.xml",
-};
 const json = (data: unknown, status = 200) =>
   Response.json(data, {
     status,
@@ -63,6 +61,69 @@ export async function authorized(
   for (let i = 0; i < 64; i++)
     diff |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
   return diff === 0;
+}
+function readFilters(
+  params: URLSearchParams,
+  sources: Source[],
+  includeDate: boolean,
+) {
+  const keys = includeDate
+    ? ["category", "q", "sources", "date"]
+    : ["category", "q", "sources"];
+  if (keys.some((key) => params.getAll(key).length > 1)) return null;
+  const category = params.get("category") ?? "";
+  const query = (params.get("q") ?? "").trim();
+  if (
+    (category &&
+      ![
+        "模型进展",
+        "研究前沿",
+        "开发工具",
+        "产业动态",
+        "安全治理",
+        "具身智能",
+      ].includes(category)) ||
+    [...query].length > 200 ||
+    query.includes("\0")
+  )
+    return null;
+  const conditions: string[] = [];
+  const values: string[] = [];
+  if (category) {
+    conditions.push("category = ?");
+    values.push(category);
+  }
+  if (query) {
+    conditions.push("(title LIKE ? ESCAPE '!' OR summary LIKE ? ESCAPE '!')");
+    const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
+    values.push(pattern, pattern);
+  }
+  const selection = params.get("sources");
+  if (selection !== null) {
+    if (new TextEncoder().encode(selection).length > 2048) return null;
+    const raw = selection.split(",");
+    if (raw.length > 32) return null;
+    const ids = [...new Set(raw.map((id) => id.trim()).filter(Boolean))];
+    if (ids.some((id) => !sources.some((source) => source.id === id)))
+      return null;
+    conditions.push(
+      ids.length ? `source IN (${ids.map(() => "?").join(",")})` : "0 = 1",
+    );
+    values.push(...ids);
+  }
+  const date = params.get("date");
+  if (includeDate && date !== null) {
+    const time = Date.parse(`${date}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      !Number.isFinite(time) ||
+      new Date(time).toISOString().slice(0, 10) !== date
+    )
+      return null;
+    conditions.push("substr(published_at,1,10) = ?");
+    values.push(date);
+  }
+  return { conditions, values };
 }
 export function createApi(core: Core, deps: Dependencies = {}) {
   const getTime = deps.now ?? Date.now,
@@ -99,14 +160,25 @@ export function createApi(core: Core, deps: Dependencies = {}) {
       const details = await Promise.all(
         core.sources.map(async (source) => {
           try {
-            const url = feeds[source.id];
+            const url = source.url;
             if (!url) throw Error("Unknown source");
             const res = await fetchFeed(url, {
+              method: source.method ?? "GET",
+              body: source.request_body ?? undefined,
               headers: {
-                "User-Agent": "Mozilla/5.0 (compatible; AI-Signal/2.0)",
-                Accept: "application/rss+xml,application/xml",
+                "User-Agent": "AI-Signal/2.0 (official AI news aggregation)",
+                Accept:
+                  "application/rss+xml,application/xml,application/json,text/html,text/markdown",
+                ...(source.request_body
+                  ? { "Content-Type": "application/json" }
+                  : {}),
+                ...(source.request_language
+                  ? { "Accept-Language": source.request_language }
+                  : {}),
               },
-              signal: AbortSignal.timeout(18000),
+              signal: AbortSignal.timeout(
+                Math.min(source.timeout_seconds ?? 18, 30) * 1000,
+              ),
             });
             if (!res.ok) throw Error(`HTTP ${res.status}`);
             const reader = res.body?.getReader();
@@ -117,7 +189,7 @@ export function createApi(core: Core, deps: Dependencies = {}) {
               const { done, value } = await reader.read();
               if (done) break;
               size += value.byteLength;
-              if (size > 3000000) {
+              if (size > Math.min(source.max_bytes ?? 3000000, 6000000)) {
                 await reader.cancel();
                 throw Error("Feed too large");
               }
@@ -222,35 +294,9 @@ export function createApi(core: Core, deps: Dependencies = {}) {
         };
         const limit = Math.max(1, number("limit", 50, 350)),
           offset = number("offset", 0, 1000000);
-        const category = url.searchParams.get("category") ?? "";
-        const query = (url.searchParams.get("q") ?? "").trim();
-        if (
-          (category &&
-            ![
-              "模型进展",
-              "研究前沿",
-              "开发工具",
-              "产业动态",
-              "安全治理",
-              "具身智能",
-            ].includes(category)) ||
-          [...query].length > 200 ||
-          query.includes("\0")
-        )
-          return json({ error: "Invalid news filters" }, 400);
-        const conditions: string[] = [];
-        const values: string[] = [];
-        if (category) {
-          conditions.push("category = ?");
-          values.push(category);
-        }
-        if (query) {
-          conditions.push(
-            "(title LIKE ? ESCAPE '!' OR summary LIKE ? ESCAPE '!')",
-          );
-          const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
-          values.push(pattern, pattern);
-        }
+        const filters = readFilters(url.searchParams, core.sources, true);
+        if (!filters) return json({ error: "Invalid news filters" }, 400);
+        const { conditions, values } = filters;
         const where = conditions.length
           ? ` WHERE ${conditions.join(" AND ")}`
           : "";
@@ -305,6 +351,48 @@ export function createApi(core: Core, deps: Dependencies = {}) {
             recent_articles: recent?.count ?? 0,
             total_sources: core.sources.length,
           },
+        });
+      }
+      if (url.pathname === "/api/timeline") {
+        if (req.method !== "GET")
+          return json({ error: "Method not allowed" }, 405);
+        const daysParam = url.searchParams.get("days") ?? "30";
+        if (
+          url.searchParams.getAll("days").length > 1 ||
+          !["7", "30", "90"].includes(daysParam)
+        )
+          return json({ error: "Invalid timeline range" }, 400);
+        const days = Number(daysParam);
+        const filters = readFilters(url.searchParams, core.sources, false);
+        if (!filters) return json({ error: "Invalid news filters" }, 400);
+        const now = getTime();
+        const today = new Date(now).toISOString().slice(0, 10);
+        const start =
+          Date.parse(`${today}T00:00:00.000Z`) - (days - 1) * 86400000;
+        filters.conditions.push("published_at >= ?", "published_at <= ?");
+        filters.values.push(
+          new Date(start).toISOString(),
+          new Date(now).toISOString(),
+        );
+        const rows = (
+          await env.DB.prepare(
+            `SELECT substr(published_at,1,10) AS date,COUNT(*) AS count FROM articles WHERE ${filters.conditions.join(" AND ")} GROUP BY substr(published_at,1,10) ORDER BY date ASC`,
+          )
+            .bind(...filters.values)
+            .all<{ date: string; count: number }>()
+        ).results;
+        const counts = new Map(rows.map((row) => [row.date, row.count]));
+        const buckets = Array.from({ length: days }, (_, i) => {
+          const date = new Date(start + i * 86400000)
+            .toISOString()
+            .slice(0, 10);
+          return { date, count: counts.get(date) ?? 0 };
+        });
+        return json({
+          buckets,
+          total: buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+          timezone: "UTC",
+          days,
         });
       }
       if (url.pathname === "/api/refresh") {

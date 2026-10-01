@@ -24,7 +24,7 @@ describe("reader URL state", () => {
   it("restores a deep link, normalizes known parameters and preserves unrelated parameters, fragment and state", () => {
     window.history.replaceState({ otherApplication: { id: 8 } }, "", "/reader?tracking=one&tracking=two&view=sources&category=%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD&q=%20robots%20&q=ignored#main-content");
     const wrapper = mount(harness);
-    expect(wrapper.vm.route).toEqual({ view: "sources", category: "具身智能", query: "robots", limit: 50 });
+    expect(wrapper.vm.route).toEqual({ sources: null, date: "", days: 30, view: "sources", category: "具身智能", query: "robots", limit: 50 });
     expect(queryParams().getAll("q")).toEqual(["robots"]);
     expect(queryParams().getAll("tracking")).toEqual(["one", "two"]);
     expect(window.location.pathname).toBe("/reader");
@@ -39,7 +39,7 @@ describe("reader URL state", () => {
   ])("sanitizes invalid/default URL state: %s", (url, query) => {
     window.history.replaceState(null, "", url);
     const wrapper = mount(harness);
-    expect(wrapper.vm.route).toEqual({ view: "feed", category: "全部资讯", query, limit: 50 });
+    expect(wrapper.vm.route).toEqual({ sources: null, date: "", days: 30, view: "feed", category: "全部资讯", query, limit: 50 });
     expect(queryParams().has("view")).toBe(false);
     expect(queryParams().has("category")).toBe(false);
     expect(queryParams().get("q")).toBe(query || null);
@@ -72,7 +72,7 @@ describe("reader URL state", () => {
     wrapper.vm.navigate({ query: "new" });
     expect(wrapper.vm.route.limit).toBe(50);
     await traverse("back");
-    expect(wrapper.vm.route).toEqual({ view: "sources", category: "具身智能", query: "robots", limit: 139 });
+    expect(wrapper.vm.route).toEqual({ sources: null, date: "", days: 30, view: "sources", category: "具身智能", query: "robots", limit: 139 });
     await traverse("forward");
     expect(wrapper.vm.route.query).toBe("new");
     expect(push).toHaveBeenCalledTimes(3);

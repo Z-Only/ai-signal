@@ -78,7 +78,7 @@ fn official_sources_match_existing_site() {
 #[test]
 fn public_sources_omit_feed_urls() {
     let sources = public_sources();
-    assert_eq!(sources.len(), 5);
+    assert_eq!(sources.len(), SOURCES.len());
     assert_eq!(
         serde_json::to_value(&sources[0]).unwrap(),
         json!({"id":"openai", "name":"OpenAI", "home":"https://openai.com/news/"})
@@ -405,9 +405,12 @@ fn invalid_entries_do_not_discard_valid_neighbors() {
 
 #[test]
 fn source_id_is_preserved_for_every_publisher() {
-    for source in SOURCES {
+    for source in SOURCES
+        .iter()
+        .filter(|source| !ingestion::is_indexed_source(source.id))
+    {
         assert_eq!(
-            normalize_feed(&source, &feed(&valid_item()), now()).unwrap()[0].source,
+            normalize_feed(source, &feed(&valid_item()), now()).unwrap()[0].source,
             source.id
         );
     }
@@ -735,7 +738,11 @@ fn json_bridge_accepts_every_known_source_and_current_time_offset() {
     for source in SOURCES {
         let value: serde_json::Value = serde_json::from_str(&normalize_feed_json(
             source.id,
-            &xml,
+            if ingestion::is_indexed_source(source.id) {
+                ingestion::tests::fixture(source.id)
+            } else {
+                &xml
+            },
             "2026-09-30T20:00:00-04:00",
         ))
         .unwrap();
@@ -871,7 +878,7 @@ fn public_sources_json_bridge_is_an_array_without_internal_urls() {
     let value: serde_json::Value = serde_json::from_str(&public_sources_json()).unwrap();
     assert_eq!(value, serde_json::to_value(public_sources()).unwrap());
     let sources = value.as_array().unwrap();
-    assert_eq!(sources.len(), 5);
+    assert_eq!(sources.len(), SOURCES.len());
     for (source, expected) in sources.iter().zip(SOURCES) {
         assert_eq!(source["id"], expected.id);
         assert_eq!(source["name"], expected.name);

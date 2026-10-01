@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fmt, sync::LazyLock};
 use url::Url;
 
+mod ingestion;
+
 pub const MAX_FEED_BYTES: usize = 3_000_000;
 pub const SOURCE_ITEM_LIMIT: usize = 35;
 pub const MAX_SUMMARY_CHARS: usize = 420;
@@ -22,38 +24,179 @@ pub struct Source {
     pub name: &'static str,
     pub url: &'static str,
     pub home: &'static str,
+    /// Trusted transport method; adapters never accept caller-supplied endpoints.
+    pub method: &'static str,
+    pub request_body: Option<&'static str>,
+    pub request_language: Option<&'static str>,
+    pub max_bytes: usize,
+    pub timeout_seconds: u64,
 }
 
-pub const SOURCES: [Source; 5] = [
+pub const SOURCES: [Source; 15] = [
     Source {
         id: "openai",
         name: "OpenAI",
         url: "https://openai.com/news/rss.xml",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
         home: "https://openai.com/news/",
     },
     Source {
         id: "deepmind",
         name: "Google DeepMind",
         url: "https://deepmind.google/blog/rss.xml",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
         home: "https://deepmind.google/blog/",
     },
     Source {
         id: "google",
         name: "Google AI",
         url: "https://blog.google/innovation-and-ai/technology/ai/rss/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
         home: "https://blog.google/innovation-and-ai/technology/ai/",
     },
     Source {
         id: "nvidia",
         name: "NVIDIA",
         url: "https://blogs.nvidia.com/feed/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
         home: "https://blogs.nvidia.com/",
     },
     Source {
         id: "huggingface",
         name: "Hugging Face",
         url: "https://huggingface.co/blog/feed.xml",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
         home: "https://huggingface.co/blog",
+    },
+    Source {
+        id: "meta",
+        name: "Meta AI",
+        url: "https://about.fb.com/news/tag/ai/feed/",
+        home: "https://about.fb.com/news/tag/ai/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "microsoft",
+        name: "Microsoft AI",
+        url: "https://blogs.microsoft.com/blog/tag/ai/feed/",
+        home: "https://blogs.microsoft.com/blog/tag/ai/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "mistral",
+        name: "Mistral AI",
+        url: "https://mistral.ai/news/rss",
+        home: "https://mistral.ai/news",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "anthropic",
+        name: "Anthropic",
+        url: "https://www.anthropic.com/news",
+        home: "https://www.anthropic.com/news",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "deepseek",
+        name: "DeepSeek",
+        url: "https://api-docs.deepseek.com/updates/",
+        home: "https://api-docs.deepseek.com/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "kimi",
+        name: "Moonshot AI / Kimi",
+        url: "https://www.kimi.com/en/blog/",
+        home: "https://www.kimi.com/en/blog/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "bytedance",
+        name: "ByteDance Seed",
+        url: "https://seed.bytedance.com/api/get_article_list_v2?article_type=2&count=20&page_token=0&order_desc=true",
+        home: "https://seed.bytedance.com/en/blog/",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "tencent",
+        name: "Tencent Hunyuan",
+        url: "https://api.hunyuan.tencent.com/api/blog/publicList",
+        home: "https://hunyuan.tencent.com/research",
+        method: "POST",
+        request_body: Some(r#"{"pageNum":1,"pageSize":20,"renderType":0}"#),
+        request_language: Some("zh"),
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
+    },
+    Source {
+        id: "qwen",
+        name: "Alibaba Qwen",
+        url: "https://qwen.ai/api/v2/article/retrieval?type=qwen_ai&language=en-US",
+        home: "https://qwen.ai/blog",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: 6_000_000,
+        timeout_seconds: 30,
+    },
+    Source {
+        id: "glm",
+        name: "Z.ai Release Notes",
+        url: "https://docs.z.ai/release-notes/new-released.md",
+        home: "https://docs.z.ai/release-notes/new-released",
+        method: "GET",
+        request_body: None,
+        request_language: None,
+        max_bytes: MAX_FEED_BYTES,
+        timeout_seconds: 18,
     },
 ];
 
@@ -95,20 +238,24 @@ pub struct Article {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FeedError {
     TooLarge,
+    SourceTooLarge(usize),
     InvalidXml(String),
     InvalidFormat,
     UnsupportedDoctype,
     TooDeep,
+    InvalidSourceData,
 }
 
 impl fmt::Display for FeedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLarge => f.write_str("Feed exceeds 3 MB limit"),
+            Self::SourceTooLarge(limit) => write!(f, "Source exceeds {limit} byte limit"),
             Self::InvalidXml(message) => write!(f, "Invalid XML: {message}"),
             Self::InvalidFormat => f.write_str("Invalid RSS format"),
             Self::UnsupportedDoctype => f.write_str("RSS document types are not allowed"),
             Self::TooDeep => f.write_str("RSS exceeds XML nesting limit"),
+            Self::InvalidSourceData => f.write_str("Official source data is missing or invalid"),
         }
     }
 }
@@ -335,22 +482,37 @@ fn parse_rss(xml: &str) -> Result<Vec<RawItem>, FeedError> {
     Ok(items)
 }
 
-/// Parse at most the first 35 RSS items, validate and normalize each article,
+/// Dispatch a verified RSS/HTML/JSON/MDX source, validate and normalize articles,
 /// then deduplicate canonical URLs within the feed (first valid item wins).
 ///
+/// At most 35 source entries are considered. JSON indexes may first sort by their
+/// original publication date; RSS retains first-item precedence.
 /// Invalid individual items are skipped. Invalid XML rejects the entire feed,
 /// so a truncated response cannot silently cause a partially ingested feed.
+/// HTML/JSON/MDX indexes yielding no valid articles fail closed.
 pub fn normalize_feed(
     source: &Source,
     xml: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<Article>, FeedError> {
-    let raw_items = parse_rss(xml)?;
+    if xml.len() > source.max_bytes {
+        return Err(if source.max_bytes == MAX_FEED_BYTES {
+            FeedError::TooLarge
+        } else {
+            FeedError::SourceTooLarge(source.max_bytes)
+        });
+    }
+    let indexed_source = ingestion::is_indexed_source(source.id);
+    let raw_items = if indexed_source {
+        ingestion::parse(source, xml)?
+    } else {
+        parse_rss(xml)?
+    };
     let mut seen = BTreeSet::new();
     let mut articles = Vec::new();
     for raw in raw_items {
         let title = clean_text(&raw.title);
-        let Some(url) = canonicalize_url(&clean_text(&raw.link)) else {
+        let Some(url) = ingestion::article_url(source, &clean_text(&raw.link)) else {
             continue;
         };
         let Some(published) = raw
@@ -385,6 +547,9 @@ pub fn normalize_feed(
             fetched_at: iso_timestamp(now),
         });
     }
+    if indexed_source && articles.is_empty() {
+        return Err(FeedError::InvalidSourceData);
+    }
     Ok(articles)
 }
 
@@ -410,6 +575,12 @@ pub fn normalize_feed_json(source_id: &str, xml: &str, now_iso: &str) -> String 
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn public_sources_json() -> String {
     serde_json::json!(public_sources()).to_string()
+}
+
+/// Trusted transport metadata for hosts; never expose this as caller-controlled URLs.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn ingestion_sources_json() -> String {
+    serde_json::json!(SOURCES).to_string()
 }
 
 #[cfg(test)]

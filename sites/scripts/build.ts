@@ -32,7 +32,7 @@ await scan(join(root, "frontend/dist"));
 await writeFile("generated/assets.json", JSON.stringify(assets));
 await writeFile(
   "generated/entry.ts",
-  `import {initSync,public_sources_json,normalize_feed_json} from './ai_news_core.js';\nimport wasmModule from './ai_news_core_bg.wasm';\nimport assets from './assets.json';\nimport {createRustCore,createSite} from '../src/runtime';\ninitSync({module:wasmModule});\nexport default createSite(createRustCore({public_sources_json,normalize_feed_json}),assets);\n`,
+  `import {initSync,ingestion_sources_json,normalize_feed_json} from './ai_news_core.js';\nimport wasmModule from './ai_news_core_bg.wasm';\nimport assets from './assets.json';\nimport {createRustCore,createSite} from '../src/runtime';\ninitSync({module:wasmModule});\nexport default createSite(createRustCore({ingestion_sources_json,normalize_feed_json}),assets);\n`,
 );
 await build({
   entryPoints: ["generated/entry.ts"],

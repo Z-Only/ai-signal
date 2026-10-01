@@ -37,11 +37,28 @@ There are no permissive CORS headers or cookie-based writer credentials.
   LIKE semantics). `%`, `_` and backslash are literal characters. Queries are
   trimmed and limited to 200 Unicode characters; invalid categories and longer
   trimmed queries return JSON HTTP 400. NUL characters are rejected as invalid
-  rather than allowing SQLite to truncate the search pattern. Both filters apply across the complete
+  rather than allowing SQLite to truncate the search pattern. Optional `sources`
+  is a comma-separated list of configured source IDs; omitting it selects every
+  source, including newly configured sources, while `sources=` selects none.
+  IDs are trimmed and deduplicated, and empty comma segments are ignored. The raw
+  value is capped at 2,048 UTF-8 bytes and 32 comma-separated entries before
+  deduplication. Unknown IDs return JSON HTTP 400. Optional `date=YYYY-MM-DD`
+  restricts publication to that UTC calendar day; malformed or impossible dates
+  return JSON HTTP 400. All filters apply across the complete
   database before pagination. `pagination.total` is the filtered count; `stats`
   always describes the entire database. Limits clamp to
   1–350; offsets start at zero. `recent_articles` counts publications from the
-  rolling preceding 24 hours. `total_sources` is the five configured publishers
+  rolling preceding 24 hours. `total_sources` is the current configured registry
+- `GET /api/timeline?days=30`: public database-backed daily publication counts.
+  `days` accepts 7, 30, or 90 and defaults to 30; other values return JSON HTTP 400.
+  The response is `{buckets:[{date:"YYYY-MM-DD",count:0}],total,timezone:"UTC",days}`.
+  Buckets are ascending and include every day, even days with no articles,
+  ending today in UTC. Counts use stored `published_at`, never `fetched_at`, and
+  exclude records before the first day's UTC midnight or after the current time.
+  `total` is the sum of the daily counts. The same `category`, `q`, and `sources`
+  filters apply; `date`, `limit`, and `offset` do not restrict the timeline.
+  Reading the timeline never triggers publisher requests. Both read APIs return
+  sanitized JSON HTTP 503 when the database is unavailable
 - `POST /api/refresh`: requires `Authorization: Bearer <ADMIN_TOKEN>`. Returns
   `success`, `partial`, or `failed`, with `processed`, `inserted` and source details, or
   `busy` / `not_due` with `added: 0`. `processed` counts normalized/upserted
@@ -68,12 +85,18 @@ worker cannot write results or release a newer worker's lease. After a successfu
 or partial refresh, requests inside 50 minutes are no-ops. All-source failures
 can be retried immediately. Interrupted owners recover after lease expiry.
 
-Publisher requests are concurrent, HTTPS-only, 18-second bounded, and capped at
-3 MB both by declared size and streamed bytes. Redirects are refused rather than
-following publisher-controlled destinations. If a publisher changes its feed
-URL, update the allowlist in `news-core`; old data remains available meanwhile.
-Only UTF-8 RSS is accepted by this adapter. The shared core validates XML,
-normalizes text/URLs and applies the original Chinese category precedence.
+Publisher requests are concurrent and HTTPS-only, with an 18-second timeout
+except for Qwen's 30-second timeout. These limits apply to both the HTTP request
+and the outer refresh task. Source-specific byte limits
+apply both to declared response size and streamed bytes: 3 MB normally and 6 MB
+for Qwen's verified larger index. Redirects are refused rather than following
+publisher-controlled destinations. The core registry controls each endpoint,
+GET/POST method, optional JSON request body, language header, and response bound;
+read API parameters cannot override these values. If a publisher changes its
+endpoint, update the allowlist in `news-core`; old data remains available meanwhile.
+Responses must be UTF-8. The shared core parses supported RSS, Atom, official
+HTML/MDX indexes, and JSON indexes, normalizes text/URLs, and applies the original
+Chinese category precedence.
 
 Token comparison hashes both tokens then constant-time compares fixed-size
 SHA-256 digests. Missing configuration fails closed. API error responses are

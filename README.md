@@ -5,7 +5,7 @@ A responsive official-source AI news reader with Vue 3 and a Rust backend. Headl
 ## Architecture
 
 - `frontend/`: Vue 3, Vite, TypeScript, Bun; modular components, accessible categories, light/dark/system themes, resilient pagination.
-- `crates/news-core/`: shared pure Rust RSS normalization, validation, topic classification, canonical URLs and deduplication. Compiles natively and to WebAssembly.
+- `crates/news-core/`: shared pure Rust official RSS/HTML/JSON/MDX normalization, validation, topic classification, canonical URLs and deduplication. Compiles natively and to WebAssembly.
 - `crates/news-server/`: native Rust Axum/Tokio/reqwest/SQLite backend, hourly scheduler and static-file serving.
 - `sites/`: thin TypeScript HTTP/D1 adapter for ChatGPT Sites. Content parsing and normalization execute the same compiled Rust core; this deployment is not a native Axum process.
 - `drizzle/`: append-only Sites D1 schema migrations preserving the original database structure.
@@ -25,6 +25,11 @@ STATIC_DIR=frontend/dist cargo run -p ai-news-server
 See `crates/news-server/README.md` for backend environment variables. Never commit real credentials. `GET /api/news` is public. Administrative refresh requests require a bearer credential; unset credentials deny writes. Native startup/hourly refresh runs independently of visitors.
 
 News reads accept optional `category` (an exact category label), `q` (a trimmed title/summary substring up to 200 Unicode code points), `limit`, and `offset`. Filtering runs across the stored corpus before pagination. `pagination.total` counts matching records, while `stats` stays global. Search uses SQLite LIKE's ASCII case-insensitive matching; `%` and `_` are literal search characters. Unknown categories, overlong queries, and queries containing NUL return HTTP 400.
+
+
+Source filters use `sources=id1,id2`: omitted means all sources, an explicit empty value means none. IDs are trimmed/deduplicated and validated against the catalog (2,048 UTF-8 bytes / 32 raw segments maximum). `date=YYYY-MM-DD` filters one UTC publication day. `GET /api/timeline` accepts the same category/search/source filters and canonical `days=7|30|90` (default 30), returning ascending zero-filled UTC day buckets, their total, and excluding future timestamps; its range ignores the feed's selected date.
+
+The reader supports source multi-select, accessible daily charts and date drill-down, with URL/history restoration. See [official source provenance and bounded coverage](docs/sources.md) for all 15 channels, publisher-date semantics and adapter limitations.
 
 
 Run the frontend development server with `bun run --cwd frontend dev`; its `/api` proxy targets the backend. Configure matching ports as documented by each component.

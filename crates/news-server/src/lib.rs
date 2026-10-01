@@ -5,19 +5,22 @@ use ai_news_core::{
     SOURCES,
 };
 use axum::{
-    extract::{Query, State},
+    extract::{rejection::QueryRejection, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use futures_util::{
     future::{join_all, BoxFuture},
     StreamExt,
 };
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension,
+    TransactionBehavior,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -42,6 +45,8 @@ const CATEGORIES: [&str; 6] = [
     "产业动态",
 ];
 const FILTERED_ARTICLES: &str = r"FROM articles WHERE (?1 IS NULL OR category = ?1) AND (?2 IS NULL OR title LIKE ?2 ESCAPE '\' OR summary LIKE ?2 ESCAPE '\')";
+const MAX_SOURCE_QUERY_BYTES: usize = 2048;
+const MAX_SOURCE_QUERY_ENTRIES: usize = 32;
 const UNAVAILABLE: &str = "资讯服务暂时不可用，请稍后重试。已保存的数据不会丢失。";
 
 type Result<T> = std::result::Result<T, String>;
@@ -79,13 +84,29 @@ impl HttpFetcher {
 impl FeedFetcher for HttpFetcher {
     fn fetch<'a>(&'a self, source: &'a Source) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
-            let response = self
-                .client
-                .get(source.url)
-                .header(
-                    header::ACCEPT,
-                    "application/rss+xml, application/xml, text/xml",
-                )
+            let mut request = match source.method {
+                "GET" => self.client.get(source.url),
+                "POST" => self.client.post(source.url),
+                _ => return Err("Unsupported source method".into()),
+            };
+            if let Some(body) = source.request_body {
+                request = request
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(body);
+            }
+            if let Some(language) = source.request_language {
+                request = request.header(header::ACCEPT_LANGUAGE, language);
+            }
+            let limit_error = || {
+                if source.max_bytes == MAX_FEED_BYTES {
+                    "Feed exceeds 3 MB limit".to_string()
+                } else {
+                    format!("Feed exceeds {} byte limit", source.max_bytes)
+                }
+            };
+            let response = request
+                .timeout(Duration::from_secs(source.timeout_seconds))
+                .header(header::ACCEPT, "application/rss+xml, application/atom+xml, application/json, application/xml, text/xml, text/html")
                 .send()
                 .await
                 .map_err(|_| "Feed request failed".to_string())?;
@@ -94,16 +115,16 @@ impl FeedFetcher for HttpFetcher {
             }
             if response
                 .content_length()
-                .is_some_and(|n| n > MAX_FEED_BYTES as u64)
+                .is_some_and(|n| n > source.max_bytes as u64)
             {
-                return Err("Feed exceeds 3 MB limit".into());
+                return Err(limit_error());
             }
             let mut stream = response.bytes_stream();
             let mut bytes = Vec::new();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|_| "Feed response interrupted".to_string())?;
-                if bytes.len() + chunk.len() > MAX_FEED_BYTES {
-                    return Err("Feed exceeds 3 MB limit".into());
+                if bytes.len().saturating_add(chunk.len()) > source.max_bytes {
+                    return Err(limit_error());
                 }
                 bytes.extend_from_slice(&chunk);
             }
@@ -178,11 +199,14 @@ impl Database {
         let offset = offset.min(usize::try_from(i64::MAX).unwrap_or(usize::MAX));
         let sql_limit = sqlite_integer(limit)?;
         let sql_offset = sqlite_integer(offset)?;
+        let (filtered_sql, mut values) = filter.sql();
         self.run(move |connection| {
             // One read transaction keeps rows, totals, and run metadata coherent across processes.
             let db = connection.transaction().map_err(|e| e.to_string())?;
-            let mut statement = db.prepare(&format!("SELECT id,title,url,source,category,summary,published_at,fetched_at {FILTERED_ARTICLES} ORDER BY published_at DESC,id ASC LIMIT ?3 OFFSET ?4")).map_err(|e| e.to_string())?;
-            let articles = statement.query_map(params![filter.category, filter.pattern, sql_limit, sql_offset], |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
+            let filtered_total: usize = db.query_row(&format!("SELECT COUNT(*) {filtered_sql}"), params_from_iter(&values), |row| row_count(row, 0)).map_err(|e| e.to_string())?;
+            values.extend([SqlValue::Integer(sql_limit), SqlValue::Integer(sql_offset)]);
+            let mut statement = db.prepare(&format!("SELECT id,title,url,source,category,summary,published_at,fetched_at {filtered_sql} ORDER BY published_at DESC,id ASC LIMIT ? OFFSET ?")).map_err(|e| e.to_string())?;
+            let articles = statement.query_map(params_from_iter(&values), |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
                 .map_err(|e| e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
             let run = db.query_row("SELECT id,started_at,finished_at,status,added,details FROM runs ORDER BY started_at DESC,rowid DESC LIMIT 1", [], |row| {
                 let details: String = row.get(5)?;
@@ -190,8 +214,43 @@ impl Database {
             }).optional().map_err(|e| e.to_string())?;
             let schedule = db.query_row("SELECT value FROM settings WHERE key='schedule'", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?.unwrap_or_else(|| "尚未启用".into());
             let (total, recent): (usize, usize) = db.query_row("SELECT COUNT(*),COALESCE(SUM(published_at >= ? AND published_at <= ?),0) FROM articles", [iso_timestamp(now - chrono::Duration::days(1)), iso_timestamp(now)], |row| Ok((row_count(row, 0)?, row_count(row, 1)?))).map_err(|e| e.to_string())?;
-            let filtered_total: usize = db.query_row(&format!("SELECT COUNT(*) {FILTERED_ARTICLES}"), params![filter.category, filter.pattern], |row| row_count(row, 0)).map_err(|e| e.to_string())?;
             Ok(News { articles, sources: public_sources(), run, schedule, pagination: Pagination { total: filtered_total, limit, offset, has_more: offset.saturating_add(limit) < filtered_total }, stats: Stats { total_articles: total, recent_articles: recent, total_sources: SOURCES.len() } })
+        }).await
+    }
+    async fn timeline(
+        &self,
+        days: usize,
+        now: DateTime<Utc>,
+        filter: NewsFilter,
+    ) -> Result<Timeline> {
+        let start = now
+            .date_naive()
+            .checked_sub_days(Days::new((days - 1) as u64))
+            .ok_or("Timeline range exceeds calendar bounds")?;
+        let (mut sql, mut values) = filter.sql();
+        // Ingest normalizes every timestamp to millisecond-precision UTC. These
+        // lexicographic bounds keep the published_at index usable and exclude futures.
+        sql.push_str(" AND published_at >= ? AND published_at <= ?");
+        values.push(SqlValue::Text(format!("{start}T00:00:00.000Z")));
+        values.push(SqlValue::Text(iso_timestamp(now)));
+        self.run(move |db| {
+            let mut statement = db
+                .prepare(&format!("SELECT substr(published_at,1,10),COUNT(*) {sql} GROUP BY substr(published_at,1,10) ORDER BY substr(published_at,1,10)"))
+                .map_err(|e| e.to_string())?;
+            let counts = statement
+                .query_map(params_from_iter(&values), |row| Ok((row.get::<_, String>(0)?, row_count(row, 1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
+                .map_err(|e| e.to_string())?;
+            let buckets: Vec<_> = start.iter_days().take(days).map(|date| {
+                let date = date.to_string();
+                let count = counts.get(&date).copied().unwrap_or(0);
+                TimelineBucket { date, count }
+            }).collect();
+            let total = buckets.iter().try_fold(0usize, |total, bucket| {
+                total.checked_add(bucket.count).ok_or("Timeline count exceeds integer range")
+            })?;
+            Ok(Timeline { buckets, total, timezone: "UTC", days })
         }).await
     }
     pub async fn set_schedule(&self, enabled: bool) -> Result<()> {
@@ -269,20 +328,48 @@ pub struct Stats {
     pub recent_articles: usize,
     pub total_sources: usize,
 }
+#[derive(Debug, Serialize)]
+pub struct Timeline {
+    pub buckets: Vec<TimelineBucket>,
+    pub total: usize,
+    pub timezone: &'static str,
+    pub days: usize,
+}
+#[derive(Debug, Serialize)]
+pub struct TimelineBucket {
+    pub date: String,
+    pub count: usize,
+}
 #[derive(Default, serde::Deserialize)]
 struct NewsQuery {
     limit: Option<usize>,
     offset: Option<usize>,
     category: Option<String>,
     q: Option<String>,
+    sources: Option<String>,
+    date: Option<String>,
+}
+#[derive(Default, serde::Deserialize)]
+struct TimelineQuery {
+    category: Option<String>,
+    q: Option<String>,
+    sources: Option<String>,
+    days: Option<String>,
 }
 #[derive(Default)]
 struct NewsFilter {
     category: Option<String>,
     pattern: Option<String>,
+    sources: Option<Vec<String>>,
+    date: Option<String>,
 }
 impl NewsFilter {
-    fn new(category: Option<String>, query: Option<String>) -> Result<Self> {
+    fn new(
+        category: Option<String>,
+        query: Option<String>,
+        sources: Option<String>,
+        date: Option<String>,
+    ) -> Result<Self> {
         let category = category.filter(|value| !value.is_empty());
         if category
             .as_deref()
@@ -308,7 +395,73 @@ impl NewsFilter {
                     .replace('_', "\\_")
             )
         });
-        Ok(Self { category, pattern })
+        let sources = sources
+            .map(|input| {
+                if input.len() > MAX_SOURCE_QUERY_BYTES {
+                    return Err("Sources query must be at most 2048 bytes".into());
+                }
+                let mut selected = Vec::new();
+                if !input.trim().is_empty() {
+                    for (index, id) in input.split(',').enumerate() {
+                        if index >= MAX_SOURCE_QUERY_ENTRIES {
+                            return Err("Sources query must contain at most 32 entries".into());
+                        }
+                        let id = id.trim();
+                        if id.is_empty() {
+                            continue;
+                        }
+                        if !SOURCES.iter().any(|source| source.id == id) {
+                            return Err("Unknown source".into());
+                        }
+                        if !selected.iter().any(|source| source == id) {
+                            selected.push(id.to_string());
+                        }
+                    }
+                }
+                Ok::<_, String>(selected)
+            })
+            .transpose()?;
+        if let Some(date) = &date {
+            let canonical = date.len() == 10
+                && date.bytes().enumerate().all(|(index, byte)| {
+                    if index == 4 || index == 7 {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                });
+            if !canonical || NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+                return Err("Date must be a valid UTC calendar date in YYYY-MM-DD format".into());
+            }
+        }
+        Ok(Self {
+            category,
+            pattern,
+            sources,
+            date,
+        })
+    }
+
+    fn sql(&self) -> (String, Vec<SqlValue>) {
+        let mut sql = FILTERED_ARTICLES.to_string();
+        let mut values = vec![self.category.clone().into(), self.pattern.clone().into()];
+        if let Some(sources) = &self.sources {
+            if sources.is_empty() {
+                sql.push_str(" AND 0");
+            } else {
+                sql.push_str(&format!(
+                    " AND source IN ({})",
+                    vec!["?"; sources.len()].join(",")
+                ));
+                values.extend(sources.iter().cloned().map(SqlValue::Text));
+            }
+        }
+        if let Some(date) = &self.date {
+            sql.push_str(" AND published_at >= ? AND published_at <= ?");
+            values.push(SqlValue::Text(format!("{date}T00:00:00.000Z")));
+            values.push(SqlValue::Text(format!("{date}T23:59:59.999Z")));
+        }
+        (sql, values)
     }
 }
 #[derive(Debug, Serialize)]
@@ -396,9 +549,12 @@ impl AppState {
             return Ok(skipped);
         }
         let feeds = join_all(SOURCES.iter().map(|source| async move {
-            let fetched = tokio::time::timeout(FETCH_TIMEOUT, self.fetcher.fetch(source))
-                .await
-                .unwrap_or_else(|_| Err("Feed request timed out".into()));
+            let fetched = tokio::time::timeout(
+                Duration::from_secs(source.timeout_seconds),
+                self.fetcher.fetch(source),
+            )
+            .await
+            .unwrap_or_else(|_| Err("Feed request timed out".into()));
             let parsed = fetched
                 .and_then(|xml| normalize_feed(source, &xml, start).map_err(|e| e.to_string()));
             let mut detail = SourceDetail {
@@ -434,8 +590,15 @@ impl AppState {
     }
 }
 
-async fn news(State(state): State<AppState>, Query(query): Query<NewsQuery>) -> Response {
-    let filter = match NewsFilter::new(query.category, query.q) {
+async fn news(
+    State(state): State<AppState>,
+    query: std::result::Result<Query<NewsQuery>, QueryRejection>,
+) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "Invalid query parameters"),
+    };
+    let filter = match NewsFilter::new(query.category, query.q, query.sources, query.date) {
         Ok(filter) => filter,
         Err(message) => return error(StatusCode::BAD_REQUEST, &message),
     };
@@ -450,6 +613,29 @@ async fn news(State(state): State<AppState>, Query(query): Query<NewsQuery>) -> 
         .await
     {
         Ok(news) => Json(news).into_response(),
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE),
+    }
+}
+async fn timeline(
+    State(state): State<AppState>,
+    query: std::result::Result<Query<TimelineQuery>, QueryRejection>,
+) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "Invalid query parameters"),
+    };
+    let days = match query.days.as_deref().unwrap_or("30") {
+        "7" => 7,
+        "30" => 30,
+        "90" => 90,
+        _ => return error(StatusCode::BAD_REQUEST, "Days must be 7, 30, or 90"),
+    };
+    let filter = match NewsFilter::new(query.category, query.q, query.sources, None) {
+        Ok(filter) => filter,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
+    match state.db.timeline(days, state.clock.now(), filter).await {
+        Ok(timeline) => Json(timeline).into_response(),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE),
     }
 }
@@ -480,6 +666,7 @@ async fn headers(request: axum::extract::Request, next: Next) -> Response {
 pub fn router(state: AppState, static_dir: Option<PathBuf>) -> Router {
     let app = Router::new()
         .route("/api/news", get(news))
+        .route("/api/timeline", get(timeline))
         .route("/api/refresh", post(refresh))
         .route("/api", any(not_found))
         .route("/api/{*path}", any(not_found))
