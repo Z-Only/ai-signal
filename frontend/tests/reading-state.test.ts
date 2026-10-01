@@ -186,3 +186,100 @@ describe("restored reader integration", () => {
     expect(Object.fromEntries(apiParams())).toEqual({ limit: "50" });
   });
 });
+
+describe("history-owned result ranges", () => {
+  const range = (count: number) => news({
+    articles: Array.from({ length: count }, (_, index) => article(String(index))),
+    pagination: { total: 300, offset: 0, limit: count, has_more: true },
+  });
+  function seedHistory() {
+    window.history.replaceState({ aiSignalReader: saved(100) }, "", deepLink);
+    window.history.pushState({ aiSignalReader: saved(150) }, "", deepLink + "&view=sources");
+  }
+
+  it("restores 100 instead of retaining 150 for same-filter Back, then restores 150 on Forward", async () => {
+    seedHistory();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(range(150))));
+    const wrapper = mount(App);
+    await flushPromises();
+    expect(wrapper.find(".sources-page").exists()).toBe(true);
+    expect(window.history.state.aiSignalReader.limit).toBe(150);
+    const push = vi.spyOn(window.history, "pushState");
+    vi.mocked(fetch).mockResolvedValueOnce(respond(range(100)));
+    await traverse("back");
+    expect(Object.fromEntries(apiParams())).toEqual({ category: "具身智能", q: "robots", limit: "100" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(wrapper.findAll("[data-article-id]")).toHaveLength(100);
+    expect(window.history.state.aiSignalReader.limit).toBe(100);
+    vi.mocked(fetch).mockResolvedValueOnce(respond(range(150)));
+    await traverse("forward");
+    expect(apiParams().get("limit")).toBe("150");
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(wrapper.find(".sources-page").exists()).toBe(true);
+    expect(window.history.state.aiSignalReader.limit).toBe(150);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "error"])("interrupts same-filter pending append and ignores its late %s and history writes", async (outcome) => {
+    window.history.replaceState({ aiSignalReader: saved(100) }, "", deepLink + "&view=sources");
+    window.history.pushState({ aiSignalReader: saved(150) }, "", deepLink);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(range(150))));
+    const wrapper = mount(App);
+    await flushPromises();
+    let finishAppend!: (response: Response) => void;
+    let failAppend!: (error: Error) => void;
+    let finishRestore!: (response: Response) => void;
+    vi.mocked(fetch)
+      .mockImplementationOnce(() => new Promise<Response>((resolve, reject) => { finishAppend = resolve; failAppend = reject; }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finishRestore = resolve; }));
+    await wrapper.find(".pagination button").trigger("click");
+    const oldSignal = vi.mocked(fetch).mock.lastCall![1]!.signal!;
+    expect(apiParams().get("offset")).toBe("150");
+    await traverse("back");
+    expect(oldSignal.aborted).toBe(true);
+    expect(Object.fromEntries(apiParams())).toEqual({ category: "具身智能", q: "robots", limit: "100" });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    if (outcome === "success") finishAppend(respond({ ...range(300), pagination: { total: 300, offset: 150, limit: 150, has_more: false } }));
+    else failAppend(new Error("Obsolete append failed"));
+    await flushPromises();
+    expect(wrapper.find(".page-head .reload").attributes("disabled")).toBeDefined();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(window.history.state.aiSignalReader.limit).toBe(100);
+    finishRestore(respond(range(100)));
+    await flushPromises();
+    expect(window.history.state.aiSignalReader.limit).toBe(100);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(wrapper.find(".page-head .reload").attributes("disabled")).toBeUndefined();
+    // Ordinary navigation and rememberRange updates do not become extra fetches.
+    await wrapper.findAll("nav button")[0]!.trigger("click");
+    expect(wrapper.findAll("[data-article-id]")).toHaveLength(100);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends exactly one forced request when a popstate changes both filters and saved range", async () => {
+    window.history.replaceState({ aiSignalReader: { ...saved(100), category: "开发工具", query: "tools" } }, "", "?category=" + encodeURIComponent("开发工具") + "&q=tools");
+    window.history.pushState({ aiSignalReader: saved(150) }, "", deepLink);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(range(150))).mockResolvedValueOnce(respond(range(100))));
+    const wrapper = mount(App);
+    await flushPromises();
+    await traverse("back");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(Object.fromEntries(apiParams())).toEqual({ category: "开发工具", q: "tools", limit: "100" });
+    expect(wrapper.findAll("[data-article-id]")).toHaveLength(100);
+    expect(window.history.state.aiSignalReader.limit).toBe(100);
+  });
+
+  it("distinguishes popstate from range bookkeeping and ordinary navigation", async () => {
+    const wrapper = mount(harness);
+    expect(wrapper.vm.restoration).toBe(0);
+    wrapper.vm.rememberRange(100);
+    wrapper.vm.navigate({ view: "sources" });
+    wrapper.vm.rememberRange(150);
+    expect(wrapper.vm.restoration).toBe(0);
+    await traverse("back");
+    expect(wrapper.vm.restoration).toBe(1);
+    expect(wrapper.vm.route.limit).toBe(100);
+    wrapper.vm.rememberRange(100);
+    expect(wrapper.vm.restoration).toBe(1);
+  });
+});

@@ -262,3 +262,14 @@ describe("filtered request isolation", () => {
     expect(params().get("q")).toBe("robots");
   });
 });
+
+it("refuses an explicit history restoration after the reader unmounts", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(respond(news())));
+  const wrapper = mount(newsHarness);
+  await flushPromises();
+  const restore = wrapper.vm.restoreFilters;
+  wrapper.unmount();
+  await restore("具身智能", "robots", 100);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(wrapper.vm.active).toBe("全部资讯");
+});

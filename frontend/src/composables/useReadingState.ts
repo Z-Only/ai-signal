@@ -61,6 +61,7 @@ export function useReadingState() {
   }
 
   const route = ref(read());
+  const restoration = ref(0);
   write(route.value, "replace");
   function navigate(
     change: Partial<Pick<ReadingState, "view" | "category" | "query">>,
@@ -75,7 +76,10 @@ export function useReadingState() {
     route.value = next;
   }
   function restore() {
-    route.value = read();
+    const next = read();
+    // Signal traversal before the synchronous route watcher sees the entry.
+    restoration.value += 1;
+    route.value = next;
     write(route.value, "replace");
   }
   function rememberRange(count: number) {
@@ -86,5 +90,5 @@ export function useReadingState() {
   }
   window.addEventListener("popstate", restore);
   onUnmounted(() => window.removeEventListener("popstate", restore));
-  return { route, navigate, rememberRange };
+  return { route, restoration, navigate, rememberRange };
 }

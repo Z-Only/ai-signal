@@ -10,7 +10,7 @@ import SourceDirectory from "./components/SourceDirectory.vue";
 import { useNews } from "./composables/useNews";
 import { useReadingState } from "./composables/useReadingState";
 import { usePreferences } from "./composables/usePreferences";
-const { route, navigate, rememberRange } = useReadingState();
+const { route, restoration, navigate, rememberRange } = useReadingState();
 const {
   data,
   active,
@@ -22,14 +22,20 @@ const {
   resultCount,
   load,
   setFilters,
+  restoreFilters,
   retry,
 } = useNews(route.value);
 const { locale, theme, t } = usePreferences();
 const view = computed(() => route.value.view);
+let appliedRestoration = restoration.value;
 watch(
   route,
   (next, previous) => {
-    if (next.category !== previous.category || next.query !== previous.query)
+    const fromHistory = appliedRestoration !== restoration.value;
+    appliedRestoration = restoration.value;
+    if (fromHistory)
+      void restoreFilters(next.category, next.query, next.limit);
+    else if (next.category !== previous.category || next.query !== previous.query)
       void setFilters(next.category, next.query, next.limit);
   },
   { flush: "sync" },

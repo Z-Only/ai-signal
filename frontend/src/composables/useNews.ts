@@ -90,10 +90,20 @@ export function useNews(
       await load();
       return;
     }
+    await restoreFilters(category, trimmed, limit);
+  }
+
+  async function restoreFilters(
+    category: Category,
+    search: string,
+    limit: number,
+  ): Promise<void> {
+    if (disposed) return;
     requestedLimit = limit;
     active.value = category;
-    query.value = trimmed;
-    // Preserve library metadata, but never label old results with new filters.
+    query.value = search.trim();
+    // A history entry owns its saved range, including when filters are unchanged.
+    // Clear the old page before requesting so refresh cannot retain a larger range.
     data.value = { ...data.value, articles: [], pagination: undefined };
     ready.value = false;
     await request(false);
@@ -116,6 +126,7 @@ export function useNews(
     resultCount,
     load,
     setFilters,
+    restoreFilters,
     retry,
   };
 }
