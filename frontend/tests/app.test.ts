@@ -17,7 +17,7 @@ describe("reader application", () => {
   it("keeps the baseline feed, real source names, timestamps and source health", async () => {
     const wrapper = await start();
     expect(fetch).toHaveBeenCalledWith(
-      "/api/news",
+      "/api/news?limit=50",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(wrapper.find("h1").text()).toBe("AI 的下一步，从这里看见");
@@ -60,7 +60,7 @@ describe("reader application", () => {
     expect(wrapper.find(".empty").text()).toContain("试试其他关键词或分类");
     await wrapper.findAll(".tabs button")[0]!.trigger("click");
     await flushPromises();
-    expect(fetch).toHaveBeenLastCalledWith("/api/news", expect.any(Object));
+    expect(fetch).toHaveBeenLastCalledWith("/api/news?limit=50", expect.any(Object));
     expect(wrapper.findAll(".news-card")).toHaveLength(2);
   });
   it("opens the source directory from both navigation and the radar", async () => {

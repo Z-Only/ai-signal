@@ -98,7 +98,7 @@ const en = {
   scheduleHourly: "Updated automatically every hour",
   scheduleDisabled: "Automatic updates not enabled",
   loadMore: "Load more articles",
-  loaded: "{count} of {total} matching articles loaded.",
+  loaded: "{count} loaded · {total} matching articles",
   skip: "Skip to content",
   unknownDate: "Time unavailable",
 };
@@ -199,12 +199,25 @@ const zh: Record<MessageKey, string> = {
   skip: "跳转到内容",
   unknownDate: "时间未知",
 };
+const singularEnglish: Partial<Record<MessageKey, string>> = {
+  articlesUnit: "article",
+  updatesUnit: "new update",
+  channels: "official channel",
+  resultCount: "{count} result · {loaded} shown",
+  updateCount: "{count} update",
+  syncedCount: "{count} article synced",
+  loaded: "{count} loaded · {total} matching article",
+};
 export function translate(
   locale: Locale,
   key: MessageKey,
   values: Record<string, string | number> = {},
 ): string {
-  return (locale === "en" ? en : zh)[key].replace(
+  const count = key === "loaded" ? values.total : values.count;
+  const message = locale === "en" && count === 1
+    ? singularEnglish[key] ?? en[key]
+    : (locale === "en" ? en : zh)[key];
+  return message.replace(
     /\{(\w+)\}/g,
     (_, name: string) => String(values[name] ?? `{${name}}`),
   );

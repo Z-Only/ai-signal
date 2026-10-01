@@ -107,7 +107,7 @@ describe("accessible explicit search", () => {
     vi.mocked(fetch).mockResolvedValueOnce(respond(news({ articles: [], pagination: { total: 0, offset: 0, limit: 50, has_more: false } })));
     await form.findAll("button")[1]!.trigger("click");
     await flushPromises();
-    expect(Object.fromEntries(requested())).toEqual({ category: "具身智能" });
+    expect(Object.fromEntries(requested())).toEqual({ category: "具身智能", limit: "50" });
     expect(wrapper.find(".empty").text()).toContain("No matching articles");
     expect(wrapper.find(".result-summary").text()).toBe("0 results · 0 shown");
     expect(localStorage.getItem("ai-signal-language")).toBe("en");
