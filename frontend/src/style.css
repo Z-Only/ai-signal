@@ -811,11 +811,22 @@ footer b {
     padding: 25px 20px 0;
   }
   .page-head {
-    display: block;
-    position: relative;
+    /* Keep refresh in flow, above the full-width localized title and copy. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 13px 12px;
+  }
+  .page-head > div {
+    display: contents;
   }
   .page-head .eyebrow {
     font-size: 10px;
+    margin-bottom: 0;
+  }
+  .page-head h1,
+  .page-head p {
+    grid-column: 1 / -1;
   }
   .page-head h1 {
     font-size: 24px;
@@ -826,14 +837,16 @@ footer b {
     font-size: 12px;
     line-height: 1.8;
     max-width: 260px;
+    margin: 0;
   }
   .reload {
-    position: absolute;
-    right: 0;
-    top: 0;
     margin: 0;
     padding: 7px;
     font-size: 0;
+  }
+  .page-head .reload {
+    grid-column: 2;
+    grid-row: 1;
   }
   .reload > span {
     font-size: 20px;
