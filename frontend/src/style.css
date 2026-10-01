@@ -1175,3 +1175,127 @@ select:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+
+/* Search and result feedback remain usable at narrow widths and in both themes. */
+.news-search {
+  margin-top: 26px;
+}
+.news-search label {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.search-controls input {
+  flex: 1 1 240px;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #a5b39d;
+  border-radius: 6px;
+  background: #fff;
+  color: #202921;
+  padding: 11px 13px;
+  font: inherit;
+}
+.search-controls input::placeholder {
+  color: #64705b;
+}
+.search-controls input:focus-visible {
+  outline: 3px solid #8cae39;
+  outline-offset: 3px;
+}
+.search-controls button {
+  min-height: 44px;
+  padding: 10px 15px;
+  border: 1px solid #a5b39d;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.search-controls .search-submit {
+  background: #244c33;
+  border-color: #244c33;
+  color: #fff;
+}
+.search-controls button:disabled {
+  cursor: not-allowed;
+}
+.search-help,
+.result-summary {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5c6a53;
+}
+.search-error {
+  font-size: 14px;
+  color: #a74435;
+}
+.result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 5px 16px;
+  overflow-wrap: anywhere;
+  margin: -8px 0 22px;
+}
+:root[data-theme="dark"] .search-controls input {
+  background: #1b2c21;
+  color: #e5ecdf;
+  border-color: #687a60;
+}
+:root[data-theme="dark"] .search-controls input::placeholder,
+:root[data-theme="dark"] .search-help,
+:root[data-theme="dark"] .result-summary {
+  color: #bacbb0;
+}
+:root[data-theme="dark"] .search-controls .search-submit {
+  background: #d4efab;
+  border-color: #d4efab;
+  color: #173b29;
+}
+:root[data-theme="dark"] .search-error {
+  color: #ffb7aa;
+}
+/* Muted copy still meets normal-text contrast on the light reading surfaces. */
+:root:not([data-theme="dark"]) .page-head p,
+:root:not([data-theme="dark"]) .eyebrow,
+:root:not([data-theme="dark"]) .breadcrumb,
+:root:not([data-theme="dark"]) .private,
+:root:not([data-theme="dark"]) .stats small,
+:root:not([data-theme="dark"]) .stats strong span,
+:root:not([data-theme="dark"]) .sync-stat > span,
+:root:not([data-theme="dark"]) .tabs button:not(.active),
+:root:not([data-theme="dark"]) .section-head > span,
+:root:not([data-theme="dark"]) .lead-card > p,
+:root:not([data-theme="dark"]) .lead-top > span:last-child,
+:root:not([data-theme="dark"]) .article-foot time,
+:root:not([data-theme="dark"]) .news-index,
+:root:not([data-theme="dark"]) .stream-head h2 span,
+:root:not([data-theme="dark"]) .news-meta,
+:root:not([data-theme="dark"]) .news-meta b,
+:root:not([data-theme="dark"]) .news-meta .category,
+:root:not([data-theme="dark"]) .news-card p,
+:root:not([data-theme="dark"]) .no-summary,
+:root:not([data-theme="dark"]) .external,
+:root:not([data-theme="dark"]) .source-row small,
+:root:not([data-theme="dark"]) .sources-card .section-head button,
+:root:not([data-theme="dark"]) .method-note,
+:root:not([data-theme="dark"]) .empty,
+:root:not([data-theme="dark"]) .sources-page p,
+:root:not([data-theme="dark"]) .sources-page small,
+:root:not([data-theme="dark"]) footer {
+  color: #59654f;
+}
+:root[data-theme="dark"] .private,
+:root[data-theme="dark"] .lead-top > span:last-child,
+:root[data-theme="dark"] .news-index,
+:root[data-theme="dark"] .stream-head h2 span,
+:root[data-theme="dark"] .no-summary,
+:root[data-theme="dark"] .external,
+:root[data-theme="dark"] .sources-card .section-head button {
+  color: #afbea3;
+}

@@ -222,13 +222,50 @@ export function createApi(core: Core, deps: Dependencies = {}) {
         };
         const limit = Math.max(1, number("limit", 50, 350)),
           offset = number("offset", 0, 1000000);
+        const category = url.searchParams.get("category") ?? "";
+        const query = (url.searchParams.get("q") ?? "").trim();
+        if (
+          (category &&
+            ![
+              "模型进展",
+              "研究前沿",
+              "开发工具",
+              "产业动态",
+              "安全治理",
+              "具身智能",
+            ].includes(category)) ||
+          [...query].length > 200 ||
+          query.includes("\0")
+        )
+          return json({ error: "Invalid news filters" }, 400);
+        const conditions: string[] = [];
+        const values: string[] = [];
+        if (category) {
+          conditions.push("category = ?");
+          values.push(category);
+        }
+        if (query) {
+          conditions.push(
+            "(title LIKE ? ESCAPE '!' OR summary LIKE ? ESCAPE '!')",
+          );
+          const pattern = `%${query.replace(/[!%_]/g, "!$&")}%`;
+          values.push(pattern, pattern);
+        }
+        const where = conditions.length
+          ? ` WHERE ${conditions.join(" AND ")}`
+          : "";
         const articles = (
           await env.DB.prepare(
-            "SELECT * FROM articles ORDER BY published_at DESC,id ASC LIMIT ? OFFSET ?",
+            `SELECT * FROM articles${where} ORDER BY published_at DESC,id ASC LIMIT ? OFFSET ?`,
           )
-            .bind(limit, offset)
+            .bind(...values, limit, offset)
             .all()
         ).results;
+        const matched = await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM articles${where}`,
+        )
+          .bind(...values)
+          .first<{ count: number }>();
         const total = await env.DB.prepare(
           "SELECT COUNT(*) AS count FROM articles",
         ).first<{ count: number }>();
@@ -258,10 +295,10 @@ export function createApi(core: Core, deps: Dependencies = {}) {
             : null,
           schedule: schedule?.value ?? "尚未启用",
           pagination: {
-            total: total?.count ?? 0,
+            total: matched?.count ?? 0,
             limit,
             offset,
-            has_more: offset + articles.length < (total?.count ?? 0),
+            has_more: offset + articles.length < (matched?.count ?? 0),
           },
           stats: {
             total_articles: total?.count ?? 0,

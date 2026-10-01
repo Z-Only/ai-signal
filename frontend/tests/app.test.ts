@@ -39,16 +39,28 @@ describe("reader application", () => {
     expect(wrapper.findAll(".tabs button")).toHaveLength(7);
     expect(wrapper.find(".skip-link").attributes("href")).toBe("#main-content");
   });
-  it("filters by accessible toggle buttons and explains an empty category", async () => {
+  it("requests whole-library categories and explains empty server results", async () => {
     const wrapper = await start();
+    vi.mocked(fetch).mockResolvedValueOnce(respond(news({
+      articles: [article("beyond-page", { category: "开发工具" })],
+      pagination: { total: 1, offset: 0, limit: 50, has_more: false },
+      stats: { total_articles: 139, recent_articles: 4, total_sources: 5 },
+    })));
     await wrapper.findAll(".tabs button")[3]!.trigger("click");
-    expect(wrapper.find(".lead-card").text()).toContain("Official article 2");
-    expect(wrapper.findAll(".tabs button")[3]!.attributes("aria-pressed")).toBe(
-      "true",
-    );
+    await flushPromises();
+    expect(new URL(vi.mocked(fetch).mock.lastCall![0] as string, "https://example.com").searchParams.get("category")).toBe("开发工具");
+    expect(wrapper.find(".lead-card").text()).toContain("Official article beyond-page");
+    expect(wrapper.findAll(".tabs button")[3]!.attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find(".result-summary").text()).toContain("共 1 条结果");
+    expect(wrapper.find(".tabs button span").text()).toBe("139");
+    vi.mocked(fetch).mockResolvedValueOnce(respond(news({ articles: [] })));
     await wrapper.findAll(".tabs button")[6]!.trigger("click");
-    expect(wrapper.find(".empty").text()).toContain("试试其他分类");
+    await flushPromises();
+    expect(wrapper.find(".empty").text()).toContain("没有找到匹配的资讯");
+    expect(wrapper.find(".empty").text()).toContain("试试其他关键词或分类");
     await wrapper.findAll(".tabs button")[0]!.trigger("click");
+    await flushPromises();
+    expect(fetch).toHaveBeenLastCalledWith("/api/news", expect.any(Object));
     expect(wrapper.findAll(".news-card")).toHaveLength(2);
   });
   it("opens the source directory from both navigation and the radar", async () => {
@@ -151,7 +163,8 @@ describe("reader application", () => {
     const wrapper = mount(App);
     await flushPromises();
     expect(wrapper.find('[role="alert"]').exists()).toBe(true);
-    expect(wrapper.find(".empty").text()).toContain("首次采集尚未完成");
+    expect(wrapper.find(".empty").exists()).toBe(false);
+    expect(wrapper.find(".result-summary").text()).not.toContain("共 0 条结果");
     vi.mocked(fetch).mockResolvedValueOnce(respond({ articles: "bad" }));
     await wrapper.find('[role="alert"] button').trigger("click");
     await flushPromises();

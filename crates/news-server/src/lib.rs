@@ -33,6 +33,15 @@ const LEASE_MS: i64 = 5 * 60 * 1000;
 const NOT_DUE_MS: i64 = 50 * 60 * 1000;
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(18);
+const CATEGORIES: [&str; 6] = [
+    "模型进展",
+    "研究前沿",
+    "开发工具",
+    "安全治理",
+    "具身智能",
+    "产业动态",
+];
+const FILTERED_ARTICLES: &str = r"FROM articles WHERE (?1 IS NULL OR category = ?1) AND (?2 IS NULL OR title LIKE ?2 ESCAPE '\' OR summary LIKE ?2 ESCAPE '\')";
 const UNAVAILABLE: &str = "资讯服务暂时不可用，请稍后重试。已保存的数据不会丢失。";
 
 type Result<T> = std::result::Result<T, String>;
@@ -144,13 +153,23 @@ impl Database {
         offset: usize,
         now: DateTime<Utc>,
     ) -> Result<News> {
+        self.snapshot_filtered(limit, offset, now, NewsFilter::default())
+            .await
+    }
+    async fn snapshot_filtered(
+        &self,
+        limit: usize,
+        offset: usize,
+        now: DateTime<Utc>,
+        filter: NewsFilter,
+    ) -> Result<News> {
         let limit = limit.clamp(1, 350);
         let offset = offset.min(i64::MAX as usize);
         self.run(move |connection| {
             // One read transaction keeps rows, totals, and run metadata coherent across processes.
             let db = connection.transaction().map_err(|e| e.to_string())?;
-            let mut statement = db.prepare("SELECT id,title,url,source,category,summary,published_at,fetched_at FROM articles ORDER BY published_at DESC,id ASC LIMIT ? OFFSET ?").map_err(|e| e.to_string())?;
-            let articles = statement.query_map(params![limit, offset], |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
+            let mut statement = db.prepare(&format!("SELECT id,title,url,source,category,summary,published_at,fetched_at {FILTERED_ARTICLES} ORDER BY published_at DESC,id ASC LIMIT ?3 OFFSET ?4")).map_err(|e| e.to_string())?;
+            let articles = statement.query_map(params![filter.category, filter.pattern, limit, offset], |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
                 .map_err(|e| e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
             let run = db.query_row("SELECT id,started_at,finished_at,status,added,details FROM runs ORDER BY started_at DESC,rowid DESC LIMIT 1", [], |row| {
                 let details: String = row.get(5)?;
@@ -158,7 +177,8 @@ impl Database {
             }).optional().map_err(|e| e.to_string())?;
             let schedule = db.query_row("SELECT value FROM settings WHERE key='schedule'", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?.unwrap_or_else(|| "尚未启用".into());
             let (total, recent): (usize, usize) = db.query_row("SELECT COUNT(*),COALESCE(SUM(published_at >= ? AND published_at <= ?),0) FROM articles", [iso_timestamp(now - chrono::Duration::days(1)), iso_timestamp(now)], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())?;
-            Ok(News { articles, sources: public_sources(), run, schedule, pagination: Pagination { total, limit, offset, has_more: offset.saturating_add(limit) < total }, stats: Stats { total_articles: total, recent_articles: recent, total_sources: SOURCES.len() } })
+            let filtered_total: usize = db.query_row(&format!("SELECT COUNT(*) {FILTERED_ARTICLES}"), params![filter.category, filter.pattern], |row| row.get(0)).map_err(|e| e.to_string())?;
+            Ok(News { articles, sources: public_sources(), run, schedule, pagination: Pagination { total: filtered_total, limit, offset, has_more: offset.saturating_add(limit) < filtered_total }, stats: Stats { total_articles: total, recent_articles: recent, total_sources: SOURCES.len() } })
         }).await
     }
     pub async fn set_schedule(&self, enabled: bool) -> Result<()> {
@@ -240,6 +260,43 @@ pub struct Stats {
 struct NewsQuery {
     limit: Option<usize>,
     offset: Option<usize>,
+    category: Option<String>,
+    q: Option<String>,
+}
+#[derive(Default)]
+struct NewsFilter {
+    category: Option<String>,
+    pattern: Option<String>,
+}
+impl NewsFilter {
+    fn new(category: Option<String>, query: Option<String>) -> Result<Self> {
+        let category = category.filter(|value| !value.is_empty());
+        if category
+            .as_deref()
+            .is_some_and(|value| !CATEGORIES.contains(&value))
+        {
+            return Err("Unknown category".into());
+        }
+        let query = query.unwrap_or_default();
+        let query = query.trim();
+        if query.chars().count() > 200 {
+            return Err("Search query must be at most 200 characters".into());
+        }
+        if query.contains('\0') {
+            return Err("Search query must not contain null characters".into());
+        }
+        // Escape the escape character first, then the two LIKE wildcards.
+        let pattern = (!query.is_empty()).then(|| {
+            format!(
+                "%{}%",
+                query
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            )
+        });
+        Ok(Self { category, pattern })
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct Run {
@@ -365,12 +422,17 @@ impl AppState {
 }
 
 async fn news(State(state): State<AppState>, Query(query): Query<NewsQuery>) -> Response {
+    let filter = match NewsFilter::new(query.category, query.q) {
+        Ok(filter) => filter,
+        Err(message) => return error(StatusCode::BAD_REQUEST, &message),
+    };
     match state
         .db
-        .snapshot_page(
+        .snapshot_filtered(
             query.limit.unwrap_or(350),
             query.offset.unwrap_or(0),
             state.clock.now(),
+            filter,
         )
         .await
     {
