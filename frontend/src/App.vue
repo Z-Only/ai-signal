@@ -6,6 +6,10 @@ import NewsSearch from "./components/NewsSearch.vue";
 import NewsStats from "./components/NewsStats.vue";
 import PreferencesControl from "./components/PreferencesControl.vue";
 import SidebarNav from "./components/SidebarNav.vue";
+import SourceFilters from "./components/SourceFilters.vue";
+import TimelineView from "./components/TimelineView.vue";
+import { useTimeline } from "./composables/useTimeline";
+import { sourcesKey } from "./core/filters";
 import SourceDirectory from "./components/SourceDirectory.vue";
 import { useNews } from "./composables/useNews";
 import { useReadingState } from "./composables/useReadingState";
@@ -15,6 +19,8 @@ const {
   data,
   active,
   query,
+  sources,
+  date,
   loading,
   error,
   ready,
@@ -27,6 +33,17 @@ const {
 } = useNews(route.value);
 const { locale, theme, t } = usePreferences();
 const view = computed(() => route.value.view);
+const timeline = useTimeline(() => route.value, () => view.value === "timeline");
+const refreshing = computed(() => loading.value || (view.value === "timeline" && timeline.loading.value));
+function refresh() {
+  void load();
+  if (view.value === "timeline") void timeline.load();
+}
+async function openDay(day: string) {
+  navigate({ view: "feed", date: day });
+  await nextTick();
+  mainContent.value?.focus();
+}
 let appliedRestoration = restoration.value;
 watch(
   route,
@@ -34,9 +51,10 @@ watch(
     const fromHistory = appliedRestoration !== restoration.value;
     appliedRestoration = restoration.value;
     if (fromHistory)
-      void restoreFilters(next.category, next.query, next.limit);
-    else if (next.category !== previous.category || next.query !== previous.query)
-      void setFilters(next.category, next.query, next.limit);
+      void restoreFilters(next.category, next.query, next.limit, next.sources, next.date);
+    else if (next.category !== previous.category || next.query !== previous.query ||
+      sourcesKey(next.sources) !== sourcesKey(previous.sources) || next.date !== previous.date)
+      void setFilters(next.category, next.query, next.limit, next.sources, next.date);
   },
   { flush: "sync" },
 );
@@ -53,12 +71,14 @@ async function loadArticles(event: MouseEvent, retrying = false) {
   const category = active.value;
   const search = query.value;
   const currentView = view.value;
+  const sourceFilter = sourcesKey(sources.value);
+  const day = date.value;
   const completed = await (retrying ? retry() : load(true));
   if (!keyboard) return;
   await nextTick();
   if (
     active.value !== category || query.value !== search ||
-    view.value !== currentView
+    view.value !== currentView || sourcesKey(sources.value) !== sourceFilter || date.value !== day
   ) return;
   if (
     document.activeElement !== button &&
@@ -80,7 +100,7 @@ async function loadArticles(event: MouseEvent, retrying = false) {
   target?.focus();
   if (!target && !button.isConnected) mainContent.value?.focus();
 }
-const filtered = computed(() => active.value !== "全部资讯" || !!query.value);
+const filtered = computed(() => active.value !== "全部资讯" || !!query.value || sources.value !== null || !!date.value);
 const sourceCount = computed(
   () => data.value.stats?.total_sources ?? data.value.sources.length,
 );
@@ -128,22 +148,22 @@ const fullDate = computed(() =>
         <div class="page-head">
           <div>
             <div class="eyebrow">{{ fullDate }}</div>
-            <h1>{{ t(view === "feed" ? "feedTitle" : "sourcesTitle") }}</h1>
+            <h1>{{ t(view === "feed" ? "feedTitle" : view === "timeline" ? "timelineTitle" : "sourcesTitle") }}</h1>
             <p>
               {{
-                t(view === "feed" ? "feedDescription" : "sourcesDescription")
+                t(view === "feed" ? "feedDescription" : view === "timeline" ? "timelineDescription" : "sourcesDescription")
               }}
             </p>
           </div>
           <button
             class="reload"
             type="button"
-            :aria-label="loading ? t('loading') : t('refresh')"
-            :disabled="loading"
-            @click="load()"
+            :aria-label="refreshing ? t('loading') : t('refresh')"
+            :disabled="refreshing"
+            @click="refresh"
           >
-            <span :class="{ spin: loading }" aria-hidden="true">⟳</span
-            >{{ loading ? t("loading") : t("refresh") }}
+            <span :class="{ spin: refreshing }" aria-hidden="true">⟳</span
+            >{{ refreshing ? t("loading") : t("refresh") }}
           </button>
         </div>
         <NewsStats :data="data" :locale="locale" :t="t" />
@@ -165,7 +185,7 @@ const fullDate = computed(() =>
         >
           {{ t(data.run.status === "partial" ? "partial" : "failed") }}
         </div>
-        <template v-if="view === 'feed'">
+        <template v-if="view !== 'sources'">
           <NewsSearch :query="query" :t="t" @search="navigate({ query: $event })" />
           <CategoryFilters
             :active="active"
@@ -174,6 +194,17 @@ const fullDate = computed(() =>
             :t="t"
             @select="navigate({ category: $event })"
           />
+          <SourceFilters :sources="data.sources" :selected="sources" :t="t" @select="navigate({ sources: $event })" />
+          <div v-if="date" class="date-filter" role="status">
+            <span>{{ t("selectedDay", { date }) }}</span>
+            <button type="button" @click="navigate({ date: '' })">{{ t("clearDate") }}</button>
+          </div>
+        </template>
+        <SourceFilters v-if="view === 'sources'" :sources="data.sources" :selected="sources" :t="t" @select="navigate({ sources: $event })" />
+        <TimelineView v-if="view === 'timeline'" :data="timeline.data.value" :loading="timeline.loading.value"
+          :error="timeline.error.value" :days="route.days" :selected-date="date" :no-sources="sources?.length === 0" :t="t"
+          @days="navigate({ days: $event })" @select="openDay" @retry="timeline.load" />
+        <template v-else-if="view === 'feed'">
           <div
             class="result-summary"
             role="status"
@@ -203,9 +234,9 @@ const fullDate = computed(() =>
               role="status"
             >
               <span aria-hidden="true">◎</span>
-              <h2>{{ t(filtered ? "noResults" : "emptyTitle") }}</h2>
+              <h2>{{ t(sources?.length === 0 ? "noSourcesTitle" : filtered ? "noResults" : "emptyTitle") }}</h2>
               <p>
-                {{ t(filtered ? "noResultsHint" : "emptyLibrary") }}
+                {{ t(sources?.length === 0 ? "noSourcesHint" : filtered ? "noResultsHint" : "emptyLibrary") }}
               </p>
             </div>
             <div v-else-if="data.articles.length" class="content-grid">

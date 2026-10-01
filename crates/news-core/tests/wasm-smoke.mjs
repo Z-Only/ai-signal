@@ -6,7 +6,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const directory = path.resolve(process.argv[2] ?? 'target/news-core-web')
-const { initSync, normalize_feed_json, public_sources_json } = await import(
+const { initSync, normalize_feed_json, public_sources_json, ingestion_sources_json } = await import(
   pathToFileURL(path.join(directory, 'ai_news_core.js')).href
 )
 // Local Node can compile bytes. In Workers, the host must supply an already
@@ -19,7 +19,7 @@ const now = '2026-10-01T00:00:00Z'
 const normalize = (source, xml, date = now) => JSON.parse(normalize_feed_json(source, xml, date))
 const xml = '<rss><channel><item><title>AI robot &amp; news 🤖</title><link>https://example.com/x?utm_source=rss#part</link><pubDate>2026-09-30T00:00:00Z</pubDate><description>&lt;p&gt;New model&lt;/p&gt;</description></item></channel></rss>'
 const sources = JSON.parse(public_sources_json())
-assert.equal(sources.length, 5)
+assert.equal(sources.length, 15)
 assert.equal(sources[0].id, 'openai')
 assert.equal('url' in sources[0], false)
 
@@ -48,3 +48,22 @@ assert.equal(normalize('openai', longXml).articles[0].summary, '🤖'.repeat(420
 assert.deepEqual(JSON.parse(public_sources_json()), sources)
 assert.deepEqual(normalize('openai', xml), result)
 console.log('PASS: generated WASM exports, JSON validation, Unicode normalization, and memory growth')
+
+const ingestion = JSON.parse(ingestion_sources_json())
+assert.equal(ingestion.length, 15)
+assert.equal(ingestion.find(source => source.id === 'qwen').max_bytes, 6000000)
+assert.equal(ingestion.find(source => source.id === 'qwen').timeout_seconds, 30)
+assert.equal(ingestion.find(source => source.id === 'tencent').method, 'POST')
+for (const [source, extension] of Object.entries({ anthropic: 'html', deepseek: 'html', kimi: 'html', bytedance: 'json', tencent: 'json', qwen: 'json', glm: 'md' })) {
+  const fixture = fs.readFileSync(new URL(`./fixtures/${source}.${extension}`, import.meta.url), 'utf8')
+  const response = normalize(source, fixture)
+  assert.equal(response.ok, true, source)
+  assert.ok(response.articles.length > 0, source)
+  assert.ok(response.articles.every(article => article.source === source && article.id.length === 64), source)
+  assert.equal(normalize(source, 'Site unavailable').ok, false, source)
+}
+const glm = normalize('glm', fs.readFileSync(new URL('./fixtures/glm.md', import.meta.url), 'utf8'))
+assert.equal(glm.articles.length, 2)
+assert.notEqual(glm.articles[0].id, glm.articles[1].id)
+assert.equal(glm.articles[0].url, 'https://docs.z.ai/release-notes/new-released#2026-09-30')
+console.log('PASS: official HTML/JSON/MDX ingestion adapters and shared transport registry')

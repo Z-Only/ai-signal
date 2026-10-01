@@ -1,6 +1,15 @@
 export type Locale = "zh-CN" | "en";
 export type Theme = "light" | "dark" | "system";
-export type View = "feed" | "sources";
+export type View = "feed" | "sources" | "timeline";
+// null includes every current and future source; [] intentionally matches nothing.
+export type SourceSelection = string[] | null;
+export type TimelineDays = 7 | 30 | 90;
+export interface TimelineData {
+  buckets: { date: string; count: number }[];
+  total: number;
+  timezone: "UTC";
+  days: TimelineDays;
+}
 export const categories = [
   "全部资讯",
   "模型进展",

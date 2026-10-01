@@ -8,6 +8,7 @@ import {
   type Core,
   type Env,
   type Article,
+  type Source,
 } from "../src/adapter";
 import { createSite, createRustCore } from "../src/runtime";
 const now = Date.parse("2026-10-01T05:00:00Z");
@@ -21,10 +22,11 @@ const article: Article = {
   published_at: new Date(now).toISOString(),
   fetched_at: new Date(now).toISOString(),
 };
-const source = {
+const source: Source = {
   id: "openai",
   name: "OpenAI",
   home: "https://openai.com/news/",
+  url: "https://openai.com/news/rss.xml",
 };
 function database() {
   const db = new DatabaseSync(":memory:");
@@ -52,7 +54,7 @@ function database() {
 }
 async function setup(
   options: {
-    sources?: (typeof source)[];
+    sources?: Source[];
     parse?: Core["parse"];
     fetchFeed?: any;
   } = {},
@@ -254,6 +256,137 @@ describe("HTTP and database", () => {
     }
     expect(((await s.news()) as any).stats.total_articles).toBe(1);
   });
+  it("supports all, none, multiple source selection and exact UTC dates", async () => {
+    const sources = [
+      source,
+      {
+        id: "google",
+        name: "Google",
+        home: "https://blog.google/",
+        url: "https://blog.google/feed",
+      },
+    ];
+    const records = [
+      {
+        ...article,
+        id: "a",
+        source: "openai",
+        published_at: "2026-09-30T23:59:59.000Z",
+      },
+      {
+        ...article,
+        id: "b",
+        source: "google",
+        published_at: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        ...article,
+        id: "c",
+        source: "google",
+        published_at: "2024-02-29T12:00:00.000Z",
+      },
+    ].map((a) => ({ ...a, url: `https://example.com/${a.id}` }));
+    const s = await setup({
+      sources,
+      parse: (id) => records.filter((a) => a.source === id),
+    });
+    await s.refresh();
+    const all: any = await s.news();
+    expect(all.pagination.total).toBe(3);
+    const both: any = await s.news(
+      "?sources=openai,%20google,openai&date=2026-10-01",
+    );
+    expect(both.articles.map((a: Article) => a.id)).toEqual(["b"]);
+    expect(both.stats.total_articles).toBe(3);
+    expect(((await s.news("?sources=openai")) as any).pagination.total).toBe(1);
+    expect(((await s.news("?sources=")) as any).pagination.total).toBe(0);
+    expect(((await s.news("?sources=,%20,")) as any).pagination.total).toBe(0);
+    expect(((await s.news("?date=2024-02-29")) as any).pagination.total).toBe(
+      1,
+    );
+    for (const query of [
+      "?sources=unknown",
+      "?sources=openai&sources=google",
+      "?date=2026-10-01&date=2026-10-02",
+      "?category=&category=",
+      "?q=one&q=two",
+      "?sources=" + "x".repeat(2049),
+      "?sources=" + "openai,".repeat(32),
+      "?date=2026-02-29",
+      "?date=2026-13-01",
+      "?date=2026-2-01",
+      "?date=",
+    ]) {
+      const response = await s.api(
+        new Request("https://site.test/api/news" + query),
+        s.env,
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+  it("returns filtered zero-filled daily UTC timelines and excludes future data", async () => {
+    const records = [
+      {
+        ...article,
+        id: "a",
+        title: "Robot launch",
+        published_at: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        ...article,
+        id: "b",
+        title: "Older release",
+        published_at: "2026-09-25T00:00:00.000Z",
+      },
+      { ...article, id: "c", published_at: "2026-09-24T23:59:59.000Z" },
+      { ...article, id: "d", published_at: "2026-10-01T05:00:00.001Z" },
+    ].map((a) => ({ ...a, url: `https://example.com/${a.id}` }));
+    const s = await setup({ parse: () => records });
+    await s.refresh();
+    const timeline = async (query = "") =>
+      s.api(new Request("https://site.test/api/timeline" + query), s.env);
+    const result: any = await (await timeline("?days=7")).json();
+    expect(result).toMatchObject({ days: 7, timezone: "UTC", total: 2 });
+    expect(result.buckets).toHaveLength(7);
+    expect(result.buckets[0]).toEqual({ date: "2026-09-25", count: 1 });
+    expect(result.buckets[1]).toEqual({ date: "2026-09-26", count: 0 });
+    expect(result.buckets[6]).toEqual({ date: "2026-10-01", count: 1 });
+    const filtered: any = await (
+      await timeline(
+        "?days=7&sources=openai&q=robot&category=" +
+          encodeURIComponent("模型进展") +
+          "&date=invalid-ignored",
+      )
+    ).json();
+    expect(filtered.total).toBe(1);
+    expect(
+      ((await (await timeline("?days=7&sources=")).json()) as any).total,
+    ).toBe(0);
+    expect(((await (await timeline()).json()) as any).buckets).toHaveLength(30);
+    expect(
+      ((await (await timeline("?days=90")).json()) as any).buckets,
+    ).toHaveLength(90);
+    for (const query of [
+      "?days=0",
+      "?days=999",
+      "?days=07",
+      "?days=7&days=30",
+      "?sources=openai&sources=google",
+      "?sources=unknown",
+      "?q=%00",
+    ])
+      expect((await timeline(query)).status).toBe(400);
+    expect(
+      (
+        await s.api(
+          new Request("https://site.test/api/timeline", { method: "POST" }),
+          s.env,
+        )
+      ).status,
+    ).toBe(405);
+    s.db.close();
+    expect((await timeline()).status).toBe(503);
+  });
   it("excludes future records from the rolling day count", async () => {
     const future = {
       ...article,
@@ -361,7 +494,12 @@ describe("HTTP and database", () => {
     const partial = await setup({
       sources: [
         source,
-        { id: "google", name: "Google", home: "https://blog.google/" },
+        {
+          id: "google",
+          name: "Google",
+          home: "https://blog.google/",
+          url: "https://blog.google/feed",
+        },
       ],
       fetchFeed: vi.fn(async (url: string) => {
         if (url.includes("blog.google")) throw Error("Unavailable");
@@ -378,7 +516,9 @@ describe("HTTP and database", () => {
     async (kind) => {
       const s = await setup({
         sources:
-          kind === "unknown" ? [{ ...source, id: "missing" }] : undefined,
+          kind === "unknown"
+            ? [{ ...source, id: "missing", url: undefined }]
+            : undefined,
         parse:
           kind === "parse"
             ? () => {
@@ -401,6 +541,53 @@ describe("HTTP and database", () => {
       ).toBe("0");
     },
   );
+  it("uses trusted registry transport metadata and source-specific bounded bodies", async () => {
+    const fetchFeed = vi.fn(
+      async () =>
+        new Response("x".repeat(3000001), {
+          headers: { "Content-Type": "text/plain" },
+        }),
+    );
+    const configured: Source = {
+      ...source,
+      method: "POST",
+      request_body: '{"pageNum":1}',
+      request_language: "zh",
+      max_bytes: 6000000,
+      timeout_seconds: 30,
+    };
+    const s = await setup({ sources: [configured], fetchFeed });
+    expect(await (await s.refresh()).json()).toMatchObject({
+      status: "success",
+      processed: 1,
+    });
+    expect(fetchFeed).toHaveBeenCalledWith(
+      source.url,
+      expect.objectContaining({
+        method: "POST",
+        body: '{"pageNum":1}',
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "Accept-Language": "zh",
+          "User-Agent": "AI-Signal/2.0 (official AI news aggregation)",
+        }),
+      }),
+    );
+    const body = (await s.news()) as any;
+    expect(body.sources[0]).toEqual({
+      id: source.id,
+      name: source.name,
+      home: source.home,
+    });
+    const tooLarge = await setup({
+      sources: [{ ...source, max_bytes: 6000001 }],
+      fetchFeed: vi.fn(async () => new Response("x".repeat(6000001))),
+    });
+    expect(await (await tooLarge.refresh()).json()).toMatchObject({
+      status: "failed",
+      details: [{ error: "Feed too large" }],
+    });
+  });
   it("reports storage unavailable without leaking internals", async () => {
     const s = await setup();
     s.db.close();
@@ -426,7 +613,7 @@ describe("HTTP and database", () => {
 describe("Rust and static runtime adapter", () => {
   it("calls Rust bindings and rejects malformed envelopes", () => {
     const bindings = {
-      public_sources_json: () => JSON.stringify([source]),
+      ingestion_sources_json: () => JSON.stringify([source]),
       normalize_feed_json: () =>
         JSON.stringify({ ok: true, articles: [article] }),
     };

@@ -29,6 +29,10 @@ const emit = defineEmits<{ navigate: [value: View] }>();
         <span aria-hidden="true">◎</span>{{ t("sources")
         }}<em>{{ String(sourceCount).padStart(2, "0") }}</em>
       </button>
+      <button type="button" :class="{ selected: view === 'timeline' }"
+        :aria-current="view === 'timeline' ? 'page' : undefined" @click="emit('navigate', 'timeline')">
+        <span aria-hidden="true">▥</span>{{ t("timeline") }}
+      </button>
     </nav>
     <div class="rail-bottom">
       <span class="pulse" aria-hidden="true"></span>{{ t("capturing")

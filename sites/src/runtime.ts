@@ -7,7 +7,7 @@ import {
   type Article,
 } from "./adapter";
 export interface RustBindings {
-  public_sources_json: () => string;
+  ingestion_sources_json: () => string;
   normalize_feed_json: (id: string, xml: string, now: string) => string;
 }
 export interface Asset {
@@ -16,7 +16,7 @@ export interface Asset {
 }
 export function createRustCore(bindings: RustBindings): Core {
   return {
-    sources: JSON.parse(bindings.public_sources_json()) as Source[],
+    sources: JSON.parse(bindings.ingestion_sources_json()) as Source[],
     parse(id, xml, now) {
       const result = JSON.parse(bindings.normalize_feed_json(id, xml, now)) as {
         ok: boolean;
