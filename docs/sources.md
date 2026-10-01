@@ -18,7 +18,7 @@ Verified on 2026-10-01. This is a qualitative selection of influential model, pr
 | DeepSeek | https://api-docs.deepseek.com/updates/ | Dated official changelog sections with distinct news links |
 | Moonshot AI / Kimi | https://www.kimi.com/en/blog/ | Server-rendered dated blog cards |
 | ByteDance Seed | https://seed.bytedance.com/en/blog/ | Public first-party announcement API; PublishDate milliseconds |
-| Tencent Hunyuan | https://hunyuan.tencent.com/research | Public first-party read-only POST; official displayPublishTime/publishedAt/createdAt selection |
+| Tencent Hunyuan | https://hunyuan.tencent.com/research | Public first-party read-only POST; displayPublishTime then publishedAt; creation-only rows are skipped |
 | Alibaba Qwen | https://qwen.ai/blog | Public first-party article retrieval API; extra.date timestamp |
 | Z.ai Release Notes | https://docs.z.ai/release-notes/new-released | Official dated MDX updates; documentation announcement date |
 

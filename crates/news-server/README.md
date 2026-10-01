@@ -94,7 +94,7 @@ publisher-controlled destinations. The core registry controls each endpoint,
 GET/POST method, optional JSON request body, language header, and response bound;
 read API parameters cannot override these values. If a publisher changes its
 endpoint, update the allowlist in `news-core`; old data remains available meanwhile.
-Responses must be UTF-8. The shared core parses supported RSS, Atom, official
+Responses must be UTF-8. The shared core parses RSS 2.0, official
 HTML/MDX indexes, and JSON indexes, normalizes text/URLs, and applies the original
 Chinese category precedence.
 
