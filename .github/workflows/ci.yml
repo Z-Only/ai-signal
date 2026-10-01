@@ -188,7 +188,7 @@ jobs:
         with:
           name: coverage-sites
           path: coverage/sites
-      - name: Enforce total ≥80% and changed executable lines ≥90%
+      - name: Enforce total ≥95% and changed executable lines ≥95%
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
@@ -200,7 +200,7 @@ jobs:
             --report coverage/rust/rust.lcov . \
             --report coverage/frontend/lcov.info frontend \
             --report coverage/sites/lcov.info sites \
-            --total-min 80 --changed-min 90 \
+            --total-min 95 --changed-min 95 \
             --json-output coverage/summary.json
       - name: Keep coverage summary
         if: always()

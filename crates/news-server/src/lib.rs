@@ -194,16 +194,22 @@ impl Database {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
             let owner: Option<String> = tx.query_row("SELECT value FROM settings WHERE key='ingest_owner'", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
             if owner.as_deref() != Some(&id) { return Ok(Refresh::skipped("busy")); }
+            let mut inserted = 0;
             for article in &articles {
-                tx.execute("INSERT INTO articles(id,title,url,source,category,summary,published_at,fetched_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET title=excluded.title,summary=excluded.summary,category=excluded.category,fetched_at=excluded.fetched_at", params![article.id, article.title, article.url, article.source, article.category, article.summary, article.published_at, article.fetched_at]).map_err(|e| e.to_string())?;
+                // Ignore only an existing URL; unrelated constraint failures still abort the transaction.
+                let added = tx.execute("INSERT INTO articles(id,title,url,source,category,summary,published_at,fetched_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(url) DO NOTHING", params![article.id, article.title, article.url, article.source, article.category, article.summary, article.published_at, article.fetched_at]).map_err(|e| e.to_string())?;
+                inserted += added;
+                if added == 0 {
+                    tx.execute("UPDATE articles SET title=?,summary=?,category=?,fetched_at=? WHERE url=?", params![article.title, article.summary, article.category, article.fetched_at, article.url]).map_err(|e| e.to_string())?;
+                }
             }
             let good = details.iter().filter(|d| d.status == "ok").count();
             let status = if good == SOURCES.len() { "success" } else if good > 0 { "partial" } else { "failed" };
-            tx.execute("UPDATE runs SET finished_at=?,status=?,added=?,details=? WHERE id=?", params![iso_timestamp(now), status, articles.len(), serde_json::to_string(&details).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE runs SET finished_at=?,status=?,added=?,details=? WHERE id=?", params![iso_timestamp(now), status, inserted, serde_json::to_string(&details).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             tx.execute("UPDATE settings SET value='0' WHERE key='ingest_lease'", []).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM settings WHERE key='ingest_owner'", []).map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
-            Ok(Refresh { status: status.into(), processed: Some(articles.len()), added: None, details: Some(details) })
+            Ok(Refresh { status: status.into(), processed: Some(articles.len()), inserted: Some(inserted), added: None, details: Some(details) })
         }).await
     }
 }
@@ -260,6 +266,8 @@ pub struct Refresh {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processed: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub inserted: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Vec<SourceDetail>>,
@@ -269,6 +277,7 @@ impl Refresh {
         Self {
             status: status.into(),
             processed: None,
+            inserted: None,
             added: Some(0),
             details: None,
         }

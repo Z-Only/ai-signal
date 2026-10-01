@@ -39,7 +39,7 @@ bun run --cwd sites test:coverage
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-CI measures all handwritten application Rust, Vue and TypeScript source. Combined executable-line coverage must be at least 80%, and changed executable-line coverage at least 90%. Missing reports fail the gate. Generated WASM/bindings are built and smoke-tested, rather than treated as authored source. Tests use deterministic mock feeds and SQLite, not external news availability.
+CI measures all handwritten application Rust, Vue and TypeScript source. Combined executable-line coverage must be at least 95%, and changed executable-line coverage at least 95%. Missing reports fail the gate. Generated WASM/bindings are built and smoke-tested, rather than treated as authored source. Tests use deterministic mock feeds and SQLite, not external news availability.
 
 ## Sites deployment
 

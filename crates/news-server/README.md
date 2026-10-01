@@ -34,9 +34,9 @@ There are no permissive CORS headers or cookie-based writer credentials.
   1–350; offsets start at zero. `recent_articles` counts publications from the
   rolling preceding 24 hours. `total_sources` is the five configured publishers
 - `POST /api/refresh`: requires `Authorization: Bearer <ADMIN_TOKEN>`. Returns
-  `success`, `partial`, or `failed`, with `processed` and source details, or
+  `success`, `partial`, or `failed`, with `processed`, `inserted` and source details, or
   `busy` / `not_due` with `added: 0`. `processed` counts normalized/upserted
-  articles, not exclusively newly inserted rows
+  articles; `inserted` and `run.added` count only newly inserted URLs
 
 The existing article/category/run JSON fields are retained. The schedule is
 runtime-owned: there is no HTTP endpoint to enable or disable it. Readiness of
@@ -50,7 +50,9 @@ and indexes as the original application. SQL values use bound parameters. Every
 successful refresh writes articles, run details and lock release in one SQLite
 transaction. Database operations run in Tokio's blocking pool.
 
-The scheduler refreshes at startup, then hourly; missed ticks are skipped. A
+The scheduler refreshes at startup, then hourly; missed ticks are skipped.
+Ctrl+C and Unix SIGTERM stop HTTP serving gracefully, wait for an active refresh
+to finish, and clear the scheduler status. Signal setup errors are propagated. A
 five-minute SQLite lease coordinates concurrent requests and independent server
 processes using the same database. The lease has an owner identifier, so a stale
 worker cannot write results or release a newer worker's lease. After a successful

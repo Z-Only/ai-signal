@@ -19,7 +19,7 @@ The workflow implements checks. It **does not configure GitHub repository settin
 - Rust formatting, Clippy with warnings denied, native and shared-core WASM builds, generated-WASM Node smoke tests, unit/integration tests, LLVM line coverage
 - Vue typechecking, production build, unit tests and LCOV coverage
 - Sites Worker typechecking, build, unit tests and LCOV coverage
-- Combined production line coverage **≥80%** and PR changed executable-line coverage **≥90%**
+- Combined production line coverage **≥95%** and PR changed executable-line coverage **≥95%**
 
 The Actions token is read-only, checkout credentials are not persisted, third-party Actions are pinned to full commits, and no untrusted PR runs through `pull_request_target`. No deployment or mutation is hidden in CI.
 
@@ -32,10 +32,10 @@ python3 scripts/check_coverage.py --base "$BASE_SHA" \
   --report coverage/rust.lcov . \
   --report frontend/coverage/lcov.info frontend \
   --report sites/coverage/lcov.info sites \
-  --total-min 80 --changed-min 90 --json-output coverage/summary.json
+  --total-min 95 --changed-min 95 --json-output coverage/summary.json
 ```
 
-Each `--report` supplies an LCOV file and the directory against which its relative `SF:` paths are resolved. Absolute paths must be inside this checkout. CI compares its checked-out PR merge commit with the event's PR base SHA; push and merge-queue runs use their event base. Initial history uses the empty Git tree. The first implementation PR therefore requires 90% coverage on all newly added executable lines.
+Each `--report` supplies an LCOV file and the directory against which its relative `SF:` paths are resolved. Absolute paths must be inside this checkout. CI compares its checked-out PR merge commit with the event's PR base SHA; push and merge-queue runs use their event base. Initial history uses the empty Git tree. The first implementation PR therefore requires 95% coverage on all newly added executable lines.
 
 Production sources are Rust files under `crates/*/src/` and JS/TS/Vue files under `frontend/src/` and `sites/src/`. Every current production file must have an LCOV `SF:` record, even if unchanged, so files omitted by a test runner fail the gate. A correctly reported zero-executable-line source is permitted. Changed executable lines are the instrumenter's physical `DA:` records; comments, types, and whitespace do not become guessed executable lines. Total coverage preserves provider `LF`/`LH` summaries. LLVM computes those summaries from functions/instantiations, which can count overlapping source lines differently from file-level `DA` records; equating the two would reject valid Rust reports or erase uncovered instances. When duplicate records are merged, physical hits are combined, but unmatched summary-only uncovered instances are conservatively retained. See the official [LLVM LCOV exporter](https://github.com/llvm/llvm-project/blob/main/llvm/tools/llvm-cov/CoverageExporterLcov.cpp) and [coverage summary implementation](https://github.com/llvm/llvm-project/blob/main/llvm/tools/llvm-cov/CoverageSummaryInfo.cpp). Missing source records, empty/truncated reports, summary-only nonempty files without `DA`, and impossible summary bounds fail rather than silently pass.
 

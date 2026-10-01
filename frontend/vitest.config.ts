@@ -10,7 +10,7 @@ export default defineConfig({
       provider: "v8",
       include: ["src/**/*.{ts,vue}"],
       reporter: ["text", "json", "json-summary", "lcov"],
-      thresholds: { lines: 80, statements: 80, functions: 80, branches: 80 },
+      thresholds: { lines: 95, statements: 80, functions: 80, branches: 80 },
     },
   },
 });

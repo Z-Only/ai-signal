@@ -163,7 +163,8 @@ pub fn classify_category(text: &str) -> &'static str {
 }
 
 /// HTTPS only. Strip fragments and all lowercase `utm_` parameters, preserving
-/// other parameter order/duplicates. Credential-bearing article links are rejected.
+/// other query segments byte-for-byte, including their order and duplicates.
+/// Credential-bearing article links are rejected.
 pub fn canonicalize_url(input: &str) -> Option<String> {
     let mut url = Url::parse(input.trim()).ok()?;
     if url.scheme() != "https"
@@ -174,16 +175,20 @@ pub fn canonicalize_url(input: &str) -> Option<String> {
         return None;
     }
     url.set_fragment(None);
-    if url.query_pairs().any(|(key, _)| key.starts_with("utm_")) {
-        let pairs: Vec<(String, String)> = url
-            .query_pairs()
-            .filter(|(key, _)| !key.starts_with("utm_"))
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+    if let Some(query) = url.query() {
+        let retained: Vec<&str> = query
+            .split('&')
+            .filter(|segment| {
+                let key = segment.split_once('=').map_or(*segment, |(key, _)| key);
+                !url::form_urlencoded::parse(key.as_bytes())
+                    .next()
+                    .is_some_and(|(decoded_key, _)| decoded_key.starts_with("utm_"))
+            })
             .collect();
-        url.set_query(None);
-        if !pairs.is_empty() {
-            url.query_pairs_mut().extend_pairs(pairs);
-        }
+        // Re-encoding retained pairs would change %20 to +, escape /:~, and
+        // append = to bare flags, changing article IDs only on tracked links.
+        let query = (!retained.is_empty()).then(|| retained.join("&"));
+        url.set_query(query.as_deref());
     }
     Some(url.into())
 }

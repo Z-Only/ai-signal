@@ -1,1 +1,18 @@
-{"name":"ai-signal-sites","private":true,"type":"module","scripts":{"typecheck":"tsc --noEmit","test:coverage":"vitest run --coverage","build":"bun scripts/build.ts"},"devDependencies":{"typescript":"5.9.3","vitest":"^4.0.0","@vitest/coverage-v8":"^4.0.0","@cloudflare/workers-types":"^4.20260702.1","@types/node":"^24.0.0","esbuild":"0.25.12"}}
+{
+  "name": "ai-signal-sites",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:coverage": "vitest run --coverage",
+    "build": "bun scripts/build.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "^4.0.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/node": "^24.0.0",
+    "esbuild": "0.25.12"
+  }
+}

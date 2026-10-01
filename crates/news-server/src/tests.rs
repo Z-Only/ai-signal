@@ -193,6 +193,7 @@ async fn refresh_populates_public_contract_and_is_idempotent() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(refresh["status"], "success");
     assert_eq!(refresh["processed"], 5);
+    assert_eq!(refresh["inserted"], 5);
     assert_eq!(refresh["details"][0]["items"], 1);
     assert!(refresh["details"][0].get("error").is_none());
     let (_, _, news) = request(app.clone(), "GET", "/api/news", None).await;
@@ -692,4 +693,65 @@ async fn scheduler_waits_a_full_hour_before_next_refresh() {
     tx.send(true).unwrap();
     task.await.unwrap();
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 10);
+}
+
+#[tokio::test]
+async fn repeated_and_mixed_refreshes_count_new_urls_separately_from_processed() {
+    let (state, fetcher, clock) = fixture();
+    let first = state.refresh().await.unwrap();
+    assert_eq!(first.inserted, Some(5));
+    assert_eq!(first.processed, Some(5));
+    clock.advance(NOT_DUE_MS);
+    fetcher.set("openai", Ok(feed("openai", "Updated robot title")));
+    let repeated = state.refresh().await.unwrap();
+    assert_eq!(repeated.inserted, Some(0));
+    assert_eq!(repeated.processed, Some(5));
+    let news = state.db.snapshot().await.unwrap();
+    assert_eq!(news.run.unwrap().added, 0);
+    assert_eq!(news.articles.len(), 5);
+    let updated = news
+        .articles
+        .iter()
+        .find(|article| article.source == "openai")
+        .unwrap();
+    assert_eq!(updated.title, "Updated robot title");
+    assert_eq!(updated.category, "具身智能");
+    assert_eq!(updated.fetched_at, iso_timestamp(clock.now()));
+    clock.advance(NOT_DUE_MS);
+    fetcher.set("google", Ok(feed("new-google-url", "New AI model")));
+    let mixed = state.refresh().await.unwrap();
+    assert_eq!(mixed.inserted, Some(1));
+    assert_eq!(mixed.processed, Some(5));
+    let news = state.db.snapshot().await.unwrap();
+    assert_eq!(news.run.unwrap().added, 1);
+    assert_eq!(news.articles.len(), 6);
+}
+
+#[tokio::test]
+async fn insert_counting_does_not_hide_unrelated_constraint_failures() {
+    let (state, _, clock) = fixture();
+    state.refresh().await.unwrap();
+    let before = state.db.snapshot().await.unwrap();
+    clock.advance(NOT_DUE_MS);
+    state
+        .db
+        .acquire(clock.now(), "constraint-check".into())
+        .await
+        .unwrap();
+    let mut articles =
+        normalize_feed(&SOURCES[0], &feed("new-valid", "New AI model"), clock.now()).unwrap();
+    let mut conflicting = before.articles[0].clone();
+    // Same primary key but a different URL must fail, not be silently ignored.
+    conflicting.url = "https://example.test/primary-key-conflict".into();
+    articles.push(conflicting);
+    assert!(state
+        .db
+        .finish("constraint-check".into(), clock.now(), articles, details())
+        .await
+        .is_err());
+    let after = state.db.snapshot().await.unwrap();
+    assert_eq!(after.articles, before.articles);
+    let run = after.run.unwrap();
+    assert_eq!(run.status, "running");
+    assert_eq!(run.added, 0);
 }

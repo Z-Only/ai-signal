@@ -283,8 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--working-tree", action="store_true", help="Include staged, unstaged and untracked source")
     parser.add_argument("--repo", default=".", type=Path)
     parser.add_argument("--report", nargs=2, action="append", required=True, metavar=("LCOV_FILE", "SOURCE_ROOT"))
-    parser.add_argument("--total-min", type=float, default=80)
-    parser.add_argument("--changed-min", type=float, default=90)
+    parser.add_argument("--total-min", type=float, default=95)
+    parser.add_argument("--changed-min", type=float, default=95)
     parser.add_argument("--json-output", type=Path)
     args = parser.parse_args(argv)
     if not 0 <= args.total_min <= 100 or not 0 <= args.changed_min <= 100:

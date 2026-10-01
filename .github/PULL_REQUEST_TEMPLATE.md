@@ -6,7 +6,7 @@ Describe what changed and why.
 
 - [ ] I reviewed the complete diff, including error paths and security implications
 - [ ] Builds, static checks, and unit tests passed on the exact PR revision
-- [ ] Production line coverage is at least 80%; added/changed executable lines at least 90%
+- [ ] Production line coverage is at least 95%; added/changed executable lines at least 95%
 - [ ] No runtime source is hidden from coverage; new source has LCOV records
 - [ ] No secrets, generated dependencies, local database files, or credentials are committed
 - [ ] Documentation, migrations, rollback considerations, and screenshots are included where applicable

@@ -21,7 +21,7 @@ bun run test:coverage
 bun run build
 ```
 
-Vitest, Vue Test Utils, and jsdom test every runtime source module, including the real entrypoint. V8 coverage includes **all** `src/**/*.ts` and `src/**/*.vue` without app-source exclusions. The local aggregate minimum is 80% for lines, statements, functions, and branches. CI separately checks changed frontend lines at 90%. Coverage output is available in `coverage/coverage-summary.json`, `coverage/coverage-final.json`, and `coverage/lcov.info`. Type-only declarations have no executable lines; CSS/layout verification requires the browser visitor audit.
+Vitest, Vue Test Utils, and jsdom test every runtime source module, including the real entrypoint. V8 coverage includes **all** `src/**/*.ts` and `src/**/*.vue` without app-source exclusions. The local line minimum is 95%; statements, functions, and branches retain their additional 80% minimum. CI separately requires 95% combined production lines and 95% changed executable lines. Coverage output is available in `coverage/coverage-summary.json`, `coverage/coverage-final.json`, and `coverage/lcov.info`. Type-only declarations have no executable lines; CSS/layout verification requires the browser visitor audit.
 
 ## Reader behavior
 

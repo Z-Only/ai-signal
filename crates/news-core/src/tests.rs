@@ -879,3 +879,71 @@ fn public_sources_json_bridge_is_an_array_without_internal_urls() {
         assert!(source.get("url").is_none());
     }
 }
+
+#[test]
+fn tracking_removal_preserves_retained_query_bytes() {
+    for query in [
+        "q=a%20b",
+        "next=/a:b~c",
+        "flag",
+        "q=a%2fb&q=a%2Fb",
+        "flag&flag=&x=1&x=2",
+        "a+b=some+value",
+        "%70age=%2F",
+    ] {
+        let untracked = format!("https://example.com/p?{query}");
+        let tracked = format!("https://example.com/p?utm_source=rss&{query}&utm_medium=email");
+        assert_eq!(canonicalize_url(&untracked), Some(untracked.clone()));
+        assert_eq!(canonicalize_url(&tracked), Some(untracked), "{query}");
+    }
+}
+
+#[test]
+fn tracking_removal_decodes_only_keys_and_preserves_empty_segments() {
+    for (query, expected) in [
+        ("%75tm_source=rss&q=a%20b&u%74m_medium=email", "?q=a%20b"),
+        ("utm%5Fcampaign=rss&next=/a:b~c", "?next=/a:b~c"),
+        (
+            "keep=utm_source%3Dx&%55TM_SOURCE=rss",
+            "?keep=utm_source%3Dx&%55TM_SOURCE=rss",
+        ),
+        ("%75tm_source", ""),
+        ("utm_source=x&utm_medium=y", ""),
+        ("utm_source=&utm_medium", ""),
+        ("", "?"),
+        ("&", "?&"),
+        ("utm_source=x&", "?"),
+        ("&utm_source=x&&flag&", "?&&flag&"),
+        ("=keep&utm_source=x", "?=keep"),
+    ] {
+        assert_eq!(
+            canonicalize_url(&format!("https://example.com/p?{query}")),
+            Some(format!("https://example.com/p{expected}")),
+            "{query}",
+        );
+    }
+}
+
+#[test]
+fn tracked_and_untracked_urls_have_identical_article_ids() {
+    for query in ["q=a%20b", "next=/a:b~c", "flag"] {
+        let untracked = format!("https://example.com/p?{query}");
+        let tracked = format!("{untracked}&amp;utm_source=rss");
+        let first = normalize(&feed(&item(
+            "AI news",
+            &untracked,
+            "2026-09-30T00:00:00Z",
+            "",
+        )))
+        .unwrap();
+        let second = normalize(&feed(&item(
+            "AI news",
+            &tracked,
+            "2026-09-30T00:00:00Z",
+            "",
+        )))
+        .unwrap();
+        assert_eq!(first[0].id, second[0].id, "{query}");
+        assert_eq!(first[0].url, second[0].url, "{query}");
+    }
+}

@@ -46,7 +46,7 @@ class LcovTests(unittest.TestCase):
         result = gate.evaluate(set(report), {"crates/core/src/lib.rs": {1, 2}}, report)
         self.assertEqual((result.total_covered, result.total_lines), (3, 4))
         self.assertEqual((result.changed_covered, result.changed_lines), (2, 2))
-        self.assertEqual(len(result.failures(80, 90)), 1)
+        self.assertEqual(len(result.failures(95, 95)), 1)
 
     def test_duplicate_da_and_reports_do_not_inflate_summary(self):
         report = self.parse("SF:crates/core/src/lib.rs\nDA:1,0\nDA:1,2\nDA:2,0\nLF:3\nLH:1\nend_of_record\n")
@@ -90,21 +90,25 @@ class LcovTests(unittest.TestCase):
 
 class EvaluationTests(unittest.TestCase):
     def test_exact_thresholds_pass(self):
-        result = gate.CoverageResult(80, 100, 9, 10, (), {})
-        self.assertEqual(result.failures(80, 90), [])
+        result = gate.CoverageResult(95, 100, 95, 100, (), {})
+        self.assertEqual(result.failures(95, 95), [])
 
     def test_rounding_cannot_bypass_threshold(self):
-        result = gate.CoverageResult(79999, 100000, 89999, 100000, (), {})
-        self.assertEqual(len(result.failures(80, 90)), 2)
+        result = gate.CoverageResult(94999, 100000, 94999, 100000, (), {})
+        self.assertEqual(len(result.failures(95, 95)), 2)
+
+    def test_total_and_changed_95_percent_gates_are_independent(self):
+        self.assertEqual(len(gate.CoverageResult(94, 100, 95, 100, (), {}).failures(95, 95)), 1)
+        self.assertEqual(len(gate.CoverageResult(95, 100, 94, 100, (), {}).failures(95, 95)), 1)
 
     def test_missing_unchanged_and_changed_sources_fail(self):
         result = gate.evaluate({"a", "b", "c"}, {"a": {1}, "c": {1}}, {"a": {1: 1}})
         self.assertEqual(result.missing_files, ("b", "c"))
-        self.assertEqual(len(result.failures(80, 90)), 1)
+        self.assertEqual(len(result.failures(95, 95)), 1)
 
     def test_no_executable_changed_lines_is_allowed_but_empty_total_is_not(self):
-        self.assertEqual(gate.CoverageResult(1, 1, 0, 0, (), {}).failures(80, 90), [])
-        self.assertTrue(gate.CoverageResult(0, 0, 0, 0, (), {}).failures(80, 90))
+        self.assertEqual(gate.CoverageResult(1, 1, 0, 0, (), {}).failures(95, 95), [])
+        self.assertTrue(gate.CoverageResult(0, 0, 0, 0, (), {}).failures(95, 95))
         self.assertIn("n/a", gate.percentage(0, 0))
 
     def test_changed_denominator_uses_instrumented_lines(self):
@@ -205,6 +209,20 @@ class GitTests(unittest.TestCase):
     def test_empty_tree_can_be_initial_base(self):
         empty = subprocess.run(["git", "-C", str(self.root), "hash-object", "-t", "tree", "--stdin"], input="", text=True, check=True, stdout=subprocess.PIPE).stdout.strip()
         self.assertEqual(gate.revision(self.root, empty, tree=True), empty)
+
+    def test_cli_defaults_to_95_percent_for_both_gates(self):
+        name = "frontend/src/main.ts"
+        self.write(name, "export const value = 1\n" * 20)
+        self.commit()
+        args = ["--repo", str(self.root), "--base", self.base, "--report", "coverage.lcov", ".", "--json-output", str(self.root / "summary.json")]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            for covered, expected_exit in [(19, 0), (18, 1)]:
+                records = "".join(f"DA:{line},{int(line <= covered)}\n" for line in range(1, 21))
+                self.write("coverage.lcov", f"SF:{name}\n{records}LF:20\nLH:{covered}\nend_of_record\n")
+                self.assertEqual(gate.main(args), expected_exit)
+                summary = json.loads((self.root / "summary.json").read_text())
+                self.assertEqual(summary["total"]["minimum"], 95)
+                self.assertEqual(summary["changed"]["minimum"], 95)
 
     def test_cli_pass_fail_json_and_missing_report(self):
         name = "frontend/src/main.ts"
