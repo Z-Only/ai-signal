@@ -1,0 +1,20 @@
+import { flushPromises } from "@vue/test-utils";
+import { expect, it, vi } from "vitest";
+import { news, respond } from "./fixtures";
+it("boots the real entrypoint and handles a missing mount target", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(respond(news())));
+  document.body.innerHTML = '<div id="app"></div>';
+  const { application, bootstrap } = await import("../src/main");
+  await flushPromises();
+  expect(document.querySelector("h1")?.textContent).toContain("AI 的下一步");
+  application?.unmount();
+  expect(bootstrap(null)).toBeNull();
+  document.body.innerHTML = "";
+  expect(bootstrap()).toBeNull();
+  const target = document.createElement("div");
+  document.body.append(target);
+  const app = bootstrap(target);
+  await flushPromises();
+  expect(target.querySelector("h1")).not.toBeNull();
+  app?.unmount();
+});

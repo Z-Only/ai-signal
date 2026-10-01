@@ -1,0 +1,235 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+# No secrets, write token, pull_request_target, automatic approvals, or deployment.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tooling:
+    name: Coverage tooling tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Python syntax and coverage-gate regression tests
+        run: |
+          python3 -m py_compile scripts/check_coverage.py scripts/test_check_coverage.py
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+  rust:
+    name: Rust build, static checks, unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Install Rust components
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --component llvm-tools-preview --target wasm32-unknown-unknown
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Build native workspace
+        run: cargo build --locked --workspace --all-features
+      - name: Build shared Rust core for WASM
+        run: cargo build --locked --release -p ai-news-core --target wasm32-unknown-unknown --features wasm
+      - name: Generate bindings and smoke-test compiled WASM
+        run: |
+          cargo install wasm-bindgen-cli --locked --version 0.2.129
+          wasm-bindgen target/wasm32-unknown-unknown/release/ai_news_core.wasm --target web --out-dir sites/generated --out-name ai_news_core
+          node crates/news-core/tests/wasm-smoke.mjs sites/generated
+      - name: Upload tested WASM bindings
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wasm-bindings
+          path: sites/generated/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Run Rust unit and integration tests
+        run: cargo test --locked --workspace --all-targets --all-features
+      - name: Install pinned coverage tool
+        run: cargo install cargo-llvm-cov --locked --version 0.9.1
+      - name: Measure Rust coverage
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --locked --workspace --all-targets --all-features --lcov --output-path coverage/rust.lcov
+      - name: Upload Rust coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-rust
+          path: coverage/rust.lcov
+          if-no-files-found: error
+          retention-days: 14
+
+  frontend:
+    name: Vue build, typecheck, unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Build production frontend
+        run: bun run build
+      - name: Unit tests with coverage
+        run: bun run test:coverage
+      - name: Upload production frontend
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload frontend coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-frontend
+          path: frontend/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+  sites:
+    name: Worker build, typecheck, unit tests
+    needs: [rust, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sites
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wasm-bindings
+          path: sites/generated
+      - name: Build Worker
+        run: bun run build
+      - name: Unit tests with coverage
+        run: bun run test:coverage
+      - name: Upload Worker coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-sites
+          path: sites/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+  coverage:
+    name: Total and changed-line coverage
+    needs: [rust, frontend, sites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-rust
+          path: coverage/rust
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-frontend
+          path: coverage/frontend
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-sites
+          path: coverage/sites
+      - name: Enforce total ≥80% and changed executable lines ≥90%
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA=$(git hash-object -t tree --stdin </dev/null)
+          fi
+          python3 scripts/check_coverage.py \
+            --base "$BASE_SHA" \
+            --report coverage/rust/rust.lcov . \
+            --report coverage/frontend/lcov.info frontend \
+            --report coverage/sites/lcov.info sites \
+            --total-min 80 --changed-min 90 \
+            --json-output coverage/summary.json
+      - name: Keep coverage summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-summary
+          path: coverage/summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [tooling, rust, frontend, sites, coverage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every required job must succeed
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          results = json.loads(os.environ["JOB_RESULTS"])
+          failed = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          if failed:
+              print(f"Required CI jobs did not succeed: {failed}", file=sys.stderr)
+              sys.exit(1)
+          print("All builds, static checks, tests, and coverage gates passed.")
+          PY
