@@ -112,6 +112,17 @@ impl FeedFetcher for HttpFetcher {
     }
 }
 
+// SQLite integers are signed 64-bit values; public counts stay platform-sized.
+// Keep conversions checked now that rusqlite no longer implements usize codecs.
+fn sqlite_integer(value: usize) -> Result<i64> {
+    i64::try_from(value).map_err(|_| "Value exceeds SQLite integer range".to_string())
+}
+
+fn row_count(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<usize> {
+    let value: i64 = row.get(column)?;
+    usize::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, value))
+}
+
 /// All SQLite work runs on Tokio's blocking pool, never on an async worker.
 #[derive(Clone)]
 pub struct Database(Arc<Mutex<Connection>>);
@@ -164,20 +175,22 @@ impl Database {
         filter: NewsFilter,
     ) -> Result<News> {
         let limit = limit.clamp(1, 350);
-        let offset = offset.min(i64::MAX as usize);
+        let offset = offset.min(usize::try_from(i64::MAX).unwrap_or(usize::MAX));
+        let sql_limit = sqlite_integer(limit)?;
+        let sql_offset = sqlite_integer(offset)?;
         self.run(move |connection| {
             // One read transaction keeps rows, totals, and run metadata coherent across processes.
             let db = connection.transaction().map_err(|e| e.to_string())?;
             let mut statement = db.prepare(&format!("SELECT id,title,url,source,category,summary,published_at,fetched_at {FILTERED_ARTICLES} ORDER BY published_at DESC,id ASC LIMIT ?3 OFFSET ?4")).map_err(|e| e.to_string())?;
-            let articles = statement.query_map(params![filter.category, filter.pattern, limit, offset], |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
+            let articles = statement.query_map(params![filter.category, filter.pattern, sql_limit, sql_offset], |row| Ok(Article { id: row.get(0)?, title: row.get(1)?, url: row.get(2)?, source: row.get(3)?, category: row.get(4)?, summary: row.get(5)?, published_at: row.get(6)?, fetched_at: row.get(7)? }))
                 .map_err(|e| e.to_string())?.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
             let run = db.query_row("SELECT id,started_at,finished_at,status,added,details FROM runs ORDER BY started_at DESC,rowid DESC LIMIT 1", [], |row| {
                 let details: String = row.get(5)?;
-                Ok(Run { id: row.get(0)?, started_at: row.get(1)?, finished_at: row.get(2)?, status: row.get(3)?, added: row.get(4)?, details: serde_json::from_str(&details).unwrap_or_default() })
+                Ok(Run { id: row.get(0)?, started_at: row.get(1)?, finished_at: row.get(2)?, status: row.get(3)?, added: row_count(row, 4)?, details: serde_json::from_str(&details).unwrap_or_default() })
             }).optional().map_err(|e| e.to_string())?;
             let schedule = db.query_row("SELECT value FROM settings WHERE key='schedule'", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?.unwrap_or_else(|| "尚未启用".into());
-            let (total, recent): (usize, usize) = db.query_row("SELECT COUNT(*),COALESCE(SUM(published_at >= ? AND published_at <= ?),0) FROM articles", [iso_timestamp(now - chrono::Duration::days(1)), iso_timestamp(now)], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())?;
-            let filtered_total: usize = db.query_row(&format!("SELECT COUNT(*) {FILTERED_ARTICLES}"), params![filter.category, filter.pattern], |row| row.get(0)).map_err(|e| e.to_string())?;
+            let (total, recent): (usize, usize) = db.query_row("SELECT COUNT(*),COALESCE(SUM(published_at >= ? AND published_at <= ?),0) FROM articles", [iso_timestamp(now - chrono::Duration::days(1)), iso_timestamp(now)], |row| Ok((row_count(row, 0)?, row_count(row, 1)?))).map_err(|e| e.to_string())?;
+            let filtered_total: usize = db.query_row(&format!("SELECT COUNT(*) {FILTERED_ARTICLES}"), params![filter.category, filter.pattern], |row| row_count(row, 0)).map_err(|e| e.to_string())?;
             Ok(News { articles, sources: public_sources(), run, schedule, pagination: Pagination { total: filtered_total, limit, offset, has_more: offset.saturating_add(limit) < filtered_total }, stats: Stats { total_articles: total, recent_articles: recent, total_sources: SOURCES.len() } })
         }).await
     }
@@ -225,7 +238,7 @@ impl Database {
             }
             let good = details.iter().filter(|d| d.status == "ok").count();
             let status = if good == SOURCES.len() { "success" } else if good > 0 { "partial" } else { "failed" };
-            tx.execute("UPDATE runs SET finished_at=?,status=?,added=?,details=? WHERE id=?", params![iso_timestamp(now), status, inserted, serde_json::to_string(&details).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE runs SET finished_at=?,status=?,added=?,details=? WHERE id=?", params![iso_timestamp(now), status, sqlite_integer(inserted)?, serde_json::to_string(&details).map_err(|e| e.to_string())?, id]).map_err(|e| e.to_string())?;
             tx.execute("UPDATE settings SET value='0' WHERE key='ingest_lease'", []).map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM settings WHERE key='ingest_owner'", []).map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;

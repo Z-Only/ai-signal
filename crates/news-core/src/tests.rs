@@ -947,3 +947,40 @@ fn tracked_and_untracked_urls_have_identical_article_ids() {
         assert_eq!(first[0].url, second[0].url, "{query}");
     }
 }
+
+#[test]
+fn sha256_identity_keeps_leading_zero_bytes_and_canonical_equivalence() {
+    for url in [
+        "https://example.com/story/223",
+        "https://EXAMPLE.com:443/story/223?utm_source=rss#section",
+    ] {
+        let article = normalize(&feed(&item(
+            "AI news",
+            url,
+            "2026-09-30T00:00:00Z",
+            "An update",
+        )))
+        .unwrap()
+        .remove(0);
+        // Fixed vector independently computed from the canonical URL's UTF-8 bytes.
+        assert_eq!(
+            article.id,
+            "00c7cec5d9121cd11558453e3f03224db6136b17a6764e1dc265d84f44dde40b"
+        );
+        assert_eq!(article.url, "https://example.com/story/223");
+    }
+}
+
+#[test]
+fn xml_string_events_preserve_unicode_cdata_and_references() {
+    let xml = feed(&item(
+        "中文 &#x1F916; &amp; AI",
+        "https://example.com/unicode?a=1&amp;b=2",
+        "2026-09-30T00:00:00Z",
+        "<![CDATA[中文 <b>café</b>]]> &#20013; &amp; 🤖",
+    ));
+    let article = normalize(&xml).unwrap().remove(0);
+    assert_eq!(article.title, "中文 🤖 & AI");
+    assert_eq!(article.summary, "中文 café 中 & 🤖");
+    assert_eq!(article.url, "https://example.com/unicode?a=1&b=2");
+}
