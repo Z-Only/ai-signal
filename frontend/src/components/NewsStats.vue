@@ -23,21 +23,21 @@ const sourceCount = computed(
       <small>{{ t("collected") }}</small
       ><strong
         >{{ String(total).padStart(2, "0")
-        }}<span>{{ t("articlesUnit") }}</span></strong
+        }}<span>{{ t("articlesUnit", { count: total }) }}</span></strong
       >
     </div>
     <div>
       <small>{{ t("recent") }}</small
       ><strong
         >{{ String(recent).padStart(2, "0")
-        }}<span>{{ t("updatesUnit") }}</span></strong
+        }}<span>{{ t("updatesUnit", { count: recent }) }}</span></strong
       >
     </div>
     <div>
       <small>{{ t("officialSources") }}</small
       ><strong
         >{{ String(sourceCount).padStart(2, "0")
-        }}<span>{{ t("channels") }}</span></strong
+        }}<span>{{ t("channels", { count: sourceCount }) }}</span></strong
       >
     </div>
     <div class="sync-stat">

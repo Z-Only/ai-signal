@@ -119,7 +119,7 @@ describe("news request lifecycle", () => {
     expect(wrapper.vm.loading).toBe(false);
     vi.mocked(fetch).mockResolvedValueOnce(respond(news()));
     await wrapper.vm.load(true);
-    expect(fetch).toHaveBeenLastCalledWith("/api/news", expect.any(Object));
+    expect(fetch).toHaveBeenLastCalledWith("/api/news?limit=50", expect.any(Object));
     expect(wrapper.vm.data.articles).toHaveLength(3);
   });
 });
@@ -156,7 +156,7 @@ describe("filtered request isolation", () => {
     expect(wrapper.vm.loading).toBe(false);
     expect(wrapper.vm.ready).toBe(true);
     expect(wrapper.vm.resultCount).toBe(0);
-    expect(Object.fromEntries(params())).toEqual({ category: "具身智能", q: "new" });
+    expect(Object.fromEntries(params())).toEqual({ category: "具身智能", q: "new", limit: "50" });
     await wrapper.vm.load(true);
     expect(fetch).toHaveBeenCalledTimes(3);
   });
@@ -228,7 +228,7 @@ describe("filtered request isolation", () => {
     await wrapper.vm.setFilters("全部资讯", "");
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(wrapper.vm.data.articles).toHaveLength(3);
-    expect(params().size).toBe(0);
+    expect(Object.fromEntries(params())).toEqual({ limit: "50" });
     const changeFilters = wrapper.vm.setFilters;
     wrapper.unmount();
     await changeFilters("具身智能", "robots");

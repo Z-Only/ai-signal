@@ -22,6 +22,7 @@ const sourceName = (id: string) =>
     </div>
     <a
       v-if="lead"
+      :data-article-id="lead.id"
       :href="safeUrl(lead.url)"
       target="_blank"
       rel="noopener noreferrer"
@@ -57,6 +58,7 @@ const sourceName = (id: string) =>
     <a
       v-for="(article, index) in others"
       :key="article.id"
+      :data-article-id="article.id"
       :href="safeUrl(article.url)"
       target="_blank"
       rel="noopener noreferrer"

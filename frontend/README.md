@@ -33,7 +33,9 @@ Vitest, Vue Test Utils, and jsdom test every runtime source module, including th
 - Changing category or submitting a new search resets pagination, clears stale articles immediately, and aborts the prior request; late responses cannot replace current results
 - Repeated refresh/load-more clicks are ignored while pending; failed load-more retries preserve and extend the current results
 - Refresh failures retain the last successful response; requests time out after 15 seconds and are canceled when the reader unmounts
-- Interface language is Chinese or English; titles and summaries remain in their source language
+- View, category and submitted search are reflected in the URL and restored on reload or browser Back/Forward; unrelated parameters and fragments are retained, and invalid reader parameters are normalized
+- History remembers up to 200 loaded articles for each filter state; restoration uses one bounded request, without claiming scroll-position restoration or replaying unlimited pages
+- Interface language is Chinese or English, with singular/plural English count labels; titles and summaries remain in their source language
 - Light, dark, and system appearance preferences are stored locally, with a session-only fallback when storage is unavailable
 - Category filters are native toggle buttons; navigation reports its active page, timestamps carry machine-readable dates, and external links identify new-tab behavior
 - Reduced-motion preferences disable animation and transitions

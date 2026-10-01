@@ -120,3 +120,24 @@ describe("news model and utilities", () => {
     expect(scheduleLabel("en", "Custom schedule")).toBe("Custom schedule");
   });
 });
+
+describe("English singular counts", () => {
+  it.each([
+    ["articlesUnit", "article", "articles"],
+    ["updatesUnit", "new update", "new updates"],
+    ["channels", "official channel", "official channels"],
+    ["resultCount", "1 result · 1 shown", "2 results · 2 shown"],
+    ["updateCount", "1 update", "2 updates"],
+    ["syncedCount", "1 article synced", "2 articles synced"],
+    ["loaded", "1 loaded · 1 matching article", "2 loaded · 2 matching articles"],
+  ] as const)("inflects %s", (key, singular, plural) => {
+    expect(translate("en", key, { count: 1, total: 1, loaded: 1 })).toBe(singular);
+    expect(translate("en", key, { count: 2, total: 2, loaded: 2 })).toBe(plural);
+  });
+  it("keeps zero plural, Chinese unchanged, and unrelated messages intact", () => {
+    expect(translate("en", "resultCount", { count: 0, loaded: 0 })).toBe("0 results · 0 shown");
+    expect(translate("en", "loaded", { count: 1, total: 8 })).toBe("1 loaded · 8 matching articles");
+    expect(translate("zh-CN", "resultCount", { count: 1, loaded: 1 })).toBe("共 1 条结果 · 已显示 1 条");
+    expect(translate("en", "brand", { count: 1 })).toBe("AI Signal");
+  });
+});

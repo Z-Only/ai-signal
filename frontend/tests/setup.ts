@@ -3,6 +3,7 @@ import { enableAutoUnmount } from "@vue/test-utils";
 enableAutoUnmount(afterEach);
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   document.documentElement.removeAttribute("data-theme");
   const media = new EventTarget();
   Object.assign(media, {
